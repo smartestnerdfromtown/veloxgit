@@ -1,0 +1,63 @@
+# --- Obsidian plugin -------------------------------------------------------
+# Compiled bundle: publish it with GitHub releases instead of committing it.
+# Remove this line if you prefer to track main.js in the repository.
+main.js
+*.map
+
+# User-specific plugin settings and runtime data
+data.json
+RULES.md
+PLAN.md
+
+# Hot Reload plugin marker
+.hotreload
+
+# Vault state, in case this folder is opened as a vault during development
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache/
+.trash/
+
+# --- Dependencies ----------------------------------------------------------
+node_modules/
+
+# --- TypeScript / build output ---------------------------------------------
+*.tsbuildinfo
+dist/
+build/
+
+# --- Logs ------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- Environment -----------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Tests / coverage ------------------------------------------------------
+coverage/
+.nyc_output/
+
+# --- Tool caches -----------------------------------------------------------
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+
+# --- Editors / IDEs --------------------------------------------------------
+.vscode/
+.idea/
+*.iml
+
+# --- Operating systems -----------------------------------------------------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini

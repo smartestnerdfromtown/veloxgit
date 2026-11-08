@@ -1,0 +1,21 @@
+{
+  "name": "veloxgit",
+  "version": "0.1.0",
+  "description": "Ultra-fast, minimalist Git client for Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production"
+  },
+  "keywords": [
+    "obsidian",
+    "git"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.2",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.7.2"
+  }
+}

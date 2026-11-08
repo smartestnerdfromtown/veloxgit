@@ -1,0 +1,9 @@
+{
+  "id": "veloxgit",
+  "name": "VeloxGit",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Ultra-fast, minimalist Git client for Obsidian.",
+  "author": "VeloxGit",
+  "isDesktopOnly": true
+}

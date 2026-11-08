@@ -1,0 +1,524 @@
+import { FileSystemAdapter, Notice, Plugin } from "obsidian";
+import { BranchModal } from "./src/branch-modal";
+import { CommitModal } from "./src/commit-modal";
+import { CredentialsModal, type GitIdentity } from "./src/credentials-modal";
+import { DiffModal } from "./src/diff-modal";
+import { describeError } from "./src/error-utils";
+import { GitService, type FileChange, type GitEnvironment } from "./src/git-service";
+import { VeloxGitView, VIEW_TYPE_VELOXGIT } from "./src/veloxgit-view";
+
+/**
+ * VeloxGit - ultra-fast, minimalist Git client for Obsidian.
+ *
+ * Changed-files list in the sidebar; all Git work stays async.
+ */
+export default class VeloxGitPlugin extends Plugin {
+  private git: GitService | null = null;
+  private environment: GitEnvironment | null = null;
+  private statusBarEl: HTMLElement | null = null;
+  private identityModal: CredentialsModal | null = null;
+  private commitModal: CommitModal | null = null;
+  private diffModal: DiffModal | null = null;
+  private branchModal: BranchModal | null = null;
+  private view: VeloxGitView | null = null;
+  private staging = false;
+  private pushing = false;
+  private pulling = false;
+
+  onload(): void {
+    // Status bar text doubles as a lightweight environment indicator.
+    this.statusBarEl = this.addStatusBarItem();
+    this.setStatus("VeloxGit");
+
+    this.addCommand({
+      id: "stage-all",
+      name: "Stage all changes",
+      callback: () => void this.stageAll(),
+    });
+
+    this.addCommand({
+      id: "commit-changes",
+      name: "Commit changes",
+      callback: () => void this.promptForCommit(),
+    });
+
+    this.addCommand({
+      id: "push-changes",
+      name: "Push changes",
+      callback: () => void this.push(),
+    });
+
+    this.addCommand({
+      id: "pull-changes",
+      name: "Pull changes",
+      callback: () => void this.pull(),
+    });
+
+    this.addCommand({
+      id: "open-panel",
+      name: "Open VeloxGit panel",
+      callback: () => void this.activateView(),
+    });
+
+    this.addCommand({
+      id: "check-git-environment",
+      name: "Check Git environment",
+      callback: () => void this.checkGitEnvironment(),
+    });
+
+    this.addCommand({
+      id: "set-git-identity",
+      name: "Set Git identity",
+      callback: () => void this.promptForIdentity(),
+    });
+
+    this.registerView(VIEW_TYPE_VELOXGIT, (leaf) => {
+      const view = new VeloxGitView(leaf, {
+        stageAll: () => void this.stageAll(),
+        commit: () => void this.promptForCommit(),
+        push: () => void this.push(),
+        pull: () => void this.pull(),
+        getStatus: () => (this.git ? this.git.getStatus() : Promise.resolve(null)),
+        showDiff: (file) => void this.showDiff(file),
+        showBranchPrompt: () => void this.showBranchPrompt(),
+      });
+      this.view = view;
+      return view;
+    });
+
+    this.addRibbonIcon("git-branch", "VeloxGit: Open panel", () => {
+      void this.activateView();
+    });
+
+    // Start environment checks immediately; only the onboarding modal
+    // waits for the workspace layout.
+    void this.initializeGit().catch((error) => {
+      console.error("[VeloxGit] Initialization failed", error);
+    });
+
+    console.debug("[VeloxGit] loaded");
+  }
+
+  onunload(): void {
+    this.identityModal?.close();
+    this.identityModal = null;
+    this.commitModal?.close();
+    this.commitModal = null;
+    this.diffModal?.close();
+    this.diffModal = null;
+    this.branchModal?.close();
+    this.branchModal = null;
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_VELOXGIT);
+    this.view = null;
+
+    console.debug("[VeloxGit] unloaded");
+  }
+
+  private getVaultPath(): string | null {
+    const adapter = this.app.vault.adapter;
+    return adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
+  }
+
+  private async initializeGit(): Promise<void> {
+    const vaultPath = this.getVaultPath();
+    if (!vaultPath) {
+      this.setStatus("VeloxGit: unsupported vault");
+      new Notice("VeloxGit requires a vault stored on the local filesystem.");
+      return;
+    }
+
+    this.git = new GitService(vaultPath);
+
+    const env = await this.detectEnvironment();
+    if (!env) return;
+
+    const problem = this.environmentProblem(env);
+    if (problem) {
+      new Notice(problem);
+      return;
+    }
+
+    if (!env.userName || !env.userEmail) {
+      this.app.workspace.onLayoutReady(() => {
+        const current = this.environment;
+        if (current?.isRepo && (!current.userName || !current.userEmail)) {
+          this.openIdentityModal(current);
+        }
+      });
+    }
+
+    // A restored sidebar may have rendered before Git was ready.
+    this.refreshChanges();
+  }
+
+  private async detectEnvironment(): Promise<GitEnvironment | null> {
+    if (!this.git) return null;
+
+    try {
+      const env = await this.git.checkEnvironment();
+      this.environment = env;
+      this.applyEnvironmentStatus(env);
+      return env;
+    } catch (error) {
+      console.error("[VeloxGit] Git environment check failed", error);
+      this.environment = null;
+      this.setStatus("VeloxGit: error");
+      new Notice("VeloxGit: Git environment check failed. See console for details.");
+      return null;
+    }
+  }
+
+  private async checkGitEnvironment(): Promise<void> {
+    const env = await this.detectEnvironment();
+    if (!env) return;
+
+    const identity =
+      env.userName && env.userEmail
+        ? `${env.userName} <${env.userEmail}>`
+        : "not configured";
+
+    new Notice(
+      `VeloxGit\nGit: ${env.version ?? "not found"}\nRepository: ${env.isRepo ? "yes" : "no"}\nIdentity: ${identity}`,
+      6000,
+    );
+  }
+
+  private async promptForIdentity(): Promise<void> {
+    if (!this.git) {
+      new Notice("VeloxGit is still initializing.");
+      return;
+    }
+
+    const env = await this.detectEnvironment();
+    if (!env) return;
+
+    const problem = this.environmentProblem(env);
+    if (problem) {
+      new Notice(problem);
+      return;
+    }
+
+    this.openIdentityModal(env);
+  }
+
+  private environmentProblem(env: GitEnvironment | null): string | null {
+    if (!env) return null;
+    if (!env.available) {
+      return "VeloxGit: Git is not installed or not available on PATH.";
+    }
+    if (!env.isRepo) {
+      return "VeloxGit: this vault is not a Git repository (.git not found).";
+    }
+    return null;
+  }
+
+  /**
+   * Single pre-flight check shared by every Git action. Uses cached
+   * environment data to avoid spawning extra processes per action.
+   */
+  private requireGit(): GitService | null {
+    const git = this.git;
+    if (!git) {
+      new Notice("VeloxGit is still initializing.");
+      return null;
+    }
+
+    const problem = this.environmentProblem(this.environment);
+    if (problem) {
+      new Notice(problem);
+      return null;
+    }
+
+    return git;
+  }
+
+  /** Re-renders the sidebar list only when the panel is actually open. */
+  private refreshChanges(): void {
+    if (!this.view) return;
+    if (this.app.workspace.getLeavesOfType(VIEW_TYPE_VELOXGIT).length === 0) return;
+    void this.view.refresh();
+  }
+
+  /**
+   * Opens the diff modal immediately, then fills it when Git responds.
+   * A second click replaces the first modal; stale results are discarded.
+   */
+  private async showDiff(change: FileChange): Promise<void> {
+    const git = this.requireGit();
+    if (!git) return;
+
+    this.diffModal?.close();
+
+    const modal = new DiffModal(this.app, change.path, () => {
+      if (this.diffModal === modal) this.diffModal = null;
+    });
+    this.diffModal = modal;
+    modal.open();
+
+    try {
+      const diff = await git.getFileDiff(change);
+      if (this.diffModal !== modal) return;
+      modal.setDiff(diff);
+    } catch (error) {
+      console.error("[VeloxGit] Diff failed", error);
+      if (this.diffModal !== modal) return;
+      modal.setError(describeError(error));
+    }
+  }
+
+  /**
+   * Opens the branch switcher. Listing and switching are separate async
+   * calls, so the modal appears while Git is still answering.
+   */
+  private async showBranchPrompt(): Promise<void> {
+    const git = this.requireGit();
+    if (!git) return;
+
+    if (this.staging || this.pushing || this.pulling) {
+      new Notice("VeloxGit: finish the current Git action first.");
+      return;
+    }
+
+    let status: { branch: string | null };
+    let branches: string[];
+    try {
+      const result = await Promise.all([git.getStatus(), git.listBranches()]);
+      status = result[0];
+      branches = result[1];
+    } catch (error) {
+      console.error("[VeloxGit] Branch list failed", error);
+      new Notice(`VeloxGit: could not read branches.\n${describeError(error)}`);
+      return;
+    }
+
+    this.branchModal?.close();
+
+    const modal = new BranchModal(
+      this.app,
+      status.branch,
+      branches,
+      async (branch, create) => {
+        const started = performance.now();
+        if (create) {
+          await git.createBranch(branch);
+        } else {
+          await git.checkoutBranch(branch);
+        }
+        const elapsed = Math.round(performance.now() - started);
+        console.debug(`[VeloxGit] branch ${create ? "created" : "switched"}: ${branch} in ${elapsed} ms`);
+        new Notice(
+          create
+            ? `VeloxGit: created and switched to ${branch} in ${elapsed} ms.`
+            : `VeloxGit: switched to ${branch} in ${elapsed} ms.`,
+          3000,
+        );
+        this.refreshChanges();
+      },
+      () => {
+        if (this.branchModal === modal) this.branchModal = null;
+      },
+    );
+
+    this.branchModal = modal;
+    modal.open();
+  }
+
+  private async stageAll(): Promise<void> {
+    const git = this.requireGit();
+    if (!git) return;
+
+    if (this.staging) {
+      new Notice("VeloxGit: staging is already running.");
+      return;
+    }
+
+    this.staging = true;
+    const started = performance.now();
+
+    try {
+      await git.stageAll();
+      const elapsed = Math.round(performance.now() - started);
+      console.debug(`[VeloxGit] staged all changes in ${elapsed} ms`);
+      new Notice(`VeloxGit: all changes staged in ${elapsed} ms.`, 3000);
+      this.refreshChanges();
+    } catch (error) {
+      console.error("[VeloxGit] Stage all failed", error);
+      new Notice(`VeloxGit: git add . failed.\n${describeError(error)}`, 8000);
+    } finally {
+      this.staging = false;
+    }
+  }
+
+  private async promptForCommit(): Promise<void> {
+    const git = this.requireGit();
+    if (!git) return;
+
+    if (this.commitModal) {
+      this.commitModal.close();
+      this.commitModal = null;
+    }
+
+    this.commitModal = new CommitModal(this.app, async (message) => {
+      const started = performance.now();
+      await git.commit(message);
+      const elapsed = Math.round(performance.now() - started);
+      console.debug(`[VeloxGit] committed in ${elapsed} ms`);
+      new Notice(`VeloxGit: commit created in ${elapsed} ms.`, 3000);
+      this.refreshChanges();
+    });
+
+    this.commitModal.open();
+  }
+
+  private async push(): Promise<void> {
+    const git = this.requireGit();
+    if (!git) return;
+
+    if (this.pushing) {
+      new Notice("VeloxGit: push is already running.");
+      return;
+    }
+
+    this.pushing = true;
+    const started = performance.now();
+    const progress = new Notice("VeloxGit: pushing...", 0);
+
+    try {
+      await git.push();
+      const elapsed = Math.round(performance.now() - started);
+      console.debug(`[VeloxGit] pushed in ${elapsed} ms`);
+      progress.setMessage(`VeloxGit: push complete in ${elapsed} ms.`);
+      window.setTimeout(() => progress.hide(), 3000);
+      this.refreshChanges();
+    } catch (error) {
+      const elapsed = Math.round(performance.now() - started);
+      console.error("[VeloxGit] Push failed", error);
+      progress.setMessage(`VeloxGit: push failed after ${elapsed} ms.\n${describeError(error)}`);
+      window.setTimeout(() => progress.hide(), 10000);
+    } finally {
+      this.pushing = false;
+    }
+  }
+
+  private async pull(): Promise<void> {
+    const git = this.requireGit();
+    if (!git) return;
+
+    if (this.pulling) {
+      new Notice("VeloxGit: pull is already running.");
+      return;
+    }
+
+    this.pulling = true;
+    const started = performance.now();
+    const progress = new Notice("VeloxGit: pulling...", 0);
+
+    try {
+      const result = await git.pull();
+      const elapsed = Math.round(performance.now() - started);
+      console.debug(`[VeloxGit] pull ${result.outcome} in ${elapsed} ms`, result.output);
+
+      let sticky = false;
+
+      switch (result.outcome) {
+        case "up-to-date":
+          progress.setMessage(`VeloxGit: already up to date (${elapsed} ms).`);
+          break;
+        case "fast-forward":
+          progress.setMessage(`VeloxGit: pulled new changes (fast-forward) in ${elapsed} ms.`);
+          break;
+        case "merged":
+          progress.setMessage(`VeloxGit: pulled and merged incoming changes in ${elapsed} ms.`);
+          break;
+        case "rebased":
+          progress.setMessage(`VeloxGit: pulled and rebased local changes in ${elapsed} ms.`);
+          break;
+        case "conflict":
+          progress.setMessage(
+            "VeloxGit: pull stopped with conflicts. Resolve them in Git, then continue.",
+          );
+          sticky = true;
+          break;
+        default:
+          progress.setMessage(`VeloxGit: pull complete in ${elapsed} ms.`);
+      }
+
+      window.setTimeout(() => progress.hide(), sticky ? 15000 : 3000);
+      this.refreshChanges();
+    } catch (error) {
+      const elapsed = Math.round(performance.now() - started);
+      console.error("[VeloxGit] Pull failed", error);
+      progress.setMessage(`VeloxGit: pull failed after ${elapsed} ms.\n${describeError(error)}`);
+      window.setTimeout(() => progress.hide(), 10000);
+    } finally {
+      this.pulling = false;
+    }
+  }
+
+  private async activateView(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_VELOXGIT)[0];
+
+    if (!leaf) {
+      const rightLeaf = workspace.getRightLeaf(false);
+      if (!rightLeaf) return;
+
+      await rightLeaf.setViewState({ type: VIEW_TYPE_VELOXGIT, active: true });
+      leaf = rightLeaf;
+    }
+
+    await workspace.revealLeaf(leaf);
+  }
+
+  private openIdentityModal(env: GitEnvironment): void {
+    const git = this.git;
+    if (!git) return;
+
+    // Avoid stacking modals if the command is triggered twice.
+    if (this.identityModal) {
+      this.identityModal.close();
+      this.identityModal = null;
+    }
+
+    this.identityModal = new CredentialsModal(
+      this.app,
+      { name: env.userName ?? "", email: env.userEmail ?? "" },
+      async (identity: GitIdentity) => {
+        await git.setIdentity(identity.name, identity.email);
+
+        const env = this.environment;
+        if (env) {
+          const updated: GitEnvironment = {
+            ...env,
+            userName: identity.name,
+            userEmail: identity.email,
+          };
+          this.environment = updated;
+          this.applyEnvironmentStatus(updated);
+        } else {
+          this.setStatus("VeloxGit");
+        }
+
+        new Notice("VeloxGit: Git identity saved.");
+      },
+    );
+
+    this.identityModal.open();
+  }
+
+  private applyEnvironmentStatus(env: GitEnvironment): void {
+    if (!env.available) {
+      this.setStatus("VeloxGit: git missing");
+    } else if (!env.isRepo) {
+      this.setStatus("VeloxGit: no repo");
+    } else if (!env.userName || !env.userEmail) {
+      this.setStatus("VeloxGit: set identity");
+    } else {
+      this.setStatus("VeloxGit");
+    }
+  }
+
+  private setStatus(text: string): void {
+    this.statusBarEl?.setText(text);
+  }
+}
