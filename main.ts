@@ -1,10 +1,13 @@
 import { FileSystemAdapter, Notice, Plugin } from "obsidian";
+import { AutoSyncEngine } from "./src/auto-sync-engine";
 import { BranchModal } from "./src/branch-modal";
 import { CommitModal } from "./src/commit-modal";
 import { CredentialsModal, type GitIdentity } from "./src/credentials-modal";
 import { DiffModal } from "./src/diff-modal";
 import { describeError } from "./src/error-utils";
 import { GitService, type FileChange, type GitEnvironment } from "./src/git-service";
+import { DEFAULT_SETTINGS, normalizeSettings, type VeloxGitSettings } from "./src/settings";
+import { VeloxGitSettingTab } from "./src/settings-tab";
 import { VeloxGitView, VIEW_TYPE_VELOXGIT } from "./src/veloxgit-view";
 
 /**
@@ -13,6 +16,8 @@ import { VeloxGitView, VIEW_TYPE_VELOXGIT } from "./src/veloxgit-view";
  * Changed-files list in the sidebar; all Git work stays async.
  */
 export default class VeloxGitPlugin extends Plugin {
+  settings: VeloxGitSettings = { ...DEFAULT_SETTINGS };
+
   private git: GitService | null = null;
   private environment: GitEnvironment | null = null;
   private statusBarEl: HTMLElement | null = null;
@@ -20,6 +25,7 @@ export default class VeloxGitPlugin extends Plugin {
   private commitModal: CommitModal | null = null;
   private diffModal: DiffModal | null = null;
   private branchModal: BranchModal | null = null;
+  private autoSync: AutoSyncEngine | null = null;
   private view: VeloxGitView | null = null;
   private staging = false;
   private pushing = false;
@@ -90,9 +96,8 @@ export default class VeloxGitPlugin extends Plugin {
       void this.activateView();
     });
 
-    // Start environment checks immediately; only the onboarding modal
-    // waits for the workspace layout.
-    void this.initializeGit().catch((error) => {
+    // Load settings first, then start Git checks and background timers.
+    void this.bootstrap().catch((error) => {
       console.error("[VeloxGit] Initialization failed", error);
     });
 
@@ -100,6 +105,10 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   onunload(): void {
+    // Stop every background timer before tearing anything else down.
+    this.autoSync?.dispose();
+    this.autoSync = null;
+
     this.identityModal?.close();
     this.identityModal = null;
     this.commitModal?.close();
@@ -117,6 +126,49 @@ export default class VeloxGitPlugin extends Plugin {
   private getVaultPath(): string | null {
     const adapter = this.app.vault.adapter;
     return adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.loadSettings();
+
+    this.autoSync = new AutoSyncEngine(this.settings, {
+      onAutoSaveTick: () => this.handleAutoSaveTick(),
+      onInactivitySync: () => this.handleInactivitySync(),
+    });
+    this.autoSync.start();
+
+    this.addSettingTab(new VeloxGitSettingTab(this.app, this));
+
+    await this.initializeGit();
+
+    if (
+      this.settings.syncOnStartup &&
+      this.environment?.available &&
+      this.environment.isRepo
+    ) {
+      void this.pull();
+    }
+  }
+
+  private async loadSettings(): Promise<void> {
+    this.settings = normalizeSettings(await this.loadData());
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+    this.autoSync?.updateSettings(this.settings);
+  }
+
+  /**
+   * Timer callbacks are intentionally side-effect free for now. The silent
+   * add/commit/push pipeline is added in the next step.
+   */
+  private handleAutoSaveTick(): void {
+    console.debug("[VeloxGit] auto-save interval reached");
+  }
+
+  private handleInactivitySync(): void {
+    console.debug("[VeloxGit] inactivity sync timer fired");
   }
 
   private async initializeGit(): Promise<void> {
