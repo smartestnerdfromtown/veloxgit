@@ -21,6 +21,8 @@ export default class VeloxGitPlugin extends Plugin {
   private git: GitService | null = null;
   private environment: GitEnvironment | null = null;
   private statusBarEl: HTMLElement | null = null;
+  private syncIndicatorEl: HTMLElement | null = null;
+  private syncStatusTimer: number | null = null;
   private identityModal: CredentialsModal | null = null;
   private commitModal: CommitModal | null = null;
   private diffModal: DiffModal | null = null;
@@ -30,11 +32,16 @@ export default class VeloxGitPlugin extends Plugin {
   private staging = false;
   private pushing = false;
   private pulling = false;
+  private syncing = false;
 
   onload(): void {
     // Status bar text doubles as a lightweight environment indicator.
     this.statusBarEl = this.addStatusBarItem();
     this.setStatus("VeloxGit");
+
+    // Dedicated auto-sync indicator; hidden until a background sync runs.
+    this.syncIndicatorEl = this.addStatusBarItem();
+    this.syncIndicatorEl.style.display = "none";
 
     this.addCommand({
       id: "stage-all",
@@ -96,6 +103,13 @@ export default class VeloxGitPlugin extends Plugin {
       void this.activateView();
     });
 
+    // Feed the inactivity debouncer. registerEvent() unregisters on unload.
+    this.registerEvent(
+      this.app.vault.on("modify", () => {
+        this.autoSync?.notifyActivity();
+      }),
+    );
+
     // Load settings first, then start Git checks and background timers.
     void this.bootstrap().catch((error) => {
       console.error("[VeloxGit] Initialization failed", error);
@@ -108,6 +122,13 @@ export default class VeloxGitPlugin extends Plugin {
     // Stop every background timer before tearing anything else down.
     this.autoSync?.dispose();
     this.autoSync = null;
+
+    if (this.syncStatusTimer !== null) {
+      window.clearTimeout(this.syncStatusTimer);
+      this.syncStatusTimer = null;
+    }
+    this.syncIndicatorEl = null;
+    this.syncing = false;
 
     this.identityModal?.close();
     this.identityModal = null;
@@ -159,16 +180,79 @@ export default class VeloxGitPlugin extends Plugin {
     this.autoSync?.updateSettings(this.settings);
   }
 
-  /**
-   * Timer callbacks are intentionally side-effect free for now. The silent
-   * add/commit/push pipeline is added in the next step.
-   */
   private handleAutoSaveTick(): void {
-    console.debug("[VeloxGit] auto-save interval reached");
+    void this.silentSync();
   }
 
   private handleInactivitySync(): void {
-    console.debug("[VeloxGit] inactivity sync timer fired");
+    void this.silentSync();
+  }
+
+  /**
+   * Background add → commit → push. No modals and no Notice; the only
+   * feedback is a small status-bar indicator. Any error is logged and
+   * shown in the status bar so a bad remote can never interrupt typing.
+   */
+  private async silentSync(): Promise<void> {
+    const git = this.git;
+    const env = this.environment;
+
+    if (!git || !env?.available || !env.isRepo) return;
+    if (!env.userName || !env.userEmail) return;
+    if (this.syncing || this.staging || this.pushing || this.pulling) return;
+
+    this.syncing = true;
+    this.showSyncStatus("⟳ VeloxGit: syncing");
+    // const started = performance.now();
+
+    try {
+      await git.stageAll();
+      const committed = await git.commitIfStaged(
+        `auto-save: ${formatTimestamp()}`,
+      );
+
+      if (!committed) {
+        this.showSyncStatus("");
+        return;
+      }
+
+      await git.push();
+      // const seconds = Math.max(
+      //   1,
+      //   Math.round((performance.now() - started) / 1000),
+      // );
+      // new Notice(
+      //   `VeloxGit handled auto-sync ${seconds} seconds ago. Thank you for using it!`,
+      //   4000,
+      // );
+      this.showSyncStatus("✓ VeloxGit: saved", 2500);
+      this.refreshChanges();
+    } catch (error) {
+      console.warn("[VeloxGit] silent sync failed", error);
+      this.showSyncStatus("VeloxGit: sync failed", 6000);
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private showSyncStatus(text: string, clearAfterMs?: number): void {
+    const el = this.syncIndicatorEl;
+    if (!el) return;
+
+    el.setText(text);
+    el.style.display = text.length > 0 ? "" : "none";
+
+    if (this.syncStatusTimer !== null) {
+      window.clearTimeout(this.syncStatusTimer);
+      this.syncStatusTimer = null;
+    }
+
+    if (text.length > 0 && clearAfterMs !== undefined) {
+      this.syncStatusTimer = window.setTimeout(() => {
+        this.syncStatusTimer = null;
+        this.showSyncStatus("");
+      }, clearAfterMs);
+    }
   }
 
   private async initializeGit(): Promise<void> {
@@ -573,4 +657,10 @@ export default class VeloxGitPlugin extends Plugin {
   private setStatus(text: string): void {
     this.statusBarEl?.setText(text);
   }
+}
+
+/** Local time formatted as YYYY-MM-DD HH:mm for the auto-save commit message. */
+function formatTimestamp(date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }

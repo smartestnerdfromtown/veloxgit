@@ -142,6 +142,23 @@ export class GitService {
   }
 
   /**
+   * Commits staged changes when there are any. Returns false instead of
+   * throwing for the "nothing to commit" case, which the silent auto-save
+   * pipeline treats as a normal no-op.
+   */
+  async commitIfStaged(message: string): Promise<boolean> {
+    const result = await this.run(["commit", "-m", message], COMMIT_TIMEOUT_MS);
+    if (result.exitCode === 0) return true;
+
+    const output = `${result.stderr}\n${result.stdout}`.trim();
+    if (/nothing to commit|no changes added to commit/i.test(output)) {
+      return false;
+    }
+
+    throw new Error(result.stderr || output || "git commit failed");
+  }
+
+  /**
    * Pushes the current branch to its configured upstream.
    */
   async push(): Promise<void> {
