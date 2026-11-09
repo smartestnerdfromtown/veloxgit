@@ -18,6 +18,9 @@ const LEAVE_SYNC_DELAY_MS = 400;
 /** Minimum gap between window-leave syncs to avoid rapid app-switch spam. */
 const LEAVE_SYNC_COOLDOWN_MS = 30_000;
 
+/** Hard cap for background pushes so a dead network cannot hang the sync. */
+const SILENT_PUSH_TIMEOUT_MS = 5_000;
+
 /**
  * VeloxGit - ultra-fast, minimalist Git client for Obsidian.
  *
@@ -334,7 +337,7 @@ export default class VeloxGitPlugin extends Plugin {
         pulled?.outcome === "rebased";
 
       if (mustPush) {
-        await git.push();
+        await git.push(SILENT_PUSH_TIMEOUT_MS);
         this.pendingPush = false;
         this.clearPushRetry();
         this.showSyncStatus("✓ VeloxGit: saved", 2500);

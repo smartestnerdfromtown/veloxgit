@@ -223,9 +223,12 @@ export class GitService {
 
   /**
    * Pushes the current branch to its configured upstream.
+   *
+   * `timeoutMs` lets background syncs use a hard, short timeout so a slow or
+   * dead network can never hang the sync pipeline.
    */
-  async push(): Promise<void> {
-    const result = await this.run(["push"], NETWORK_TIMEOUT_MS);
+  async push(timeoutMs = NETWORK_TIMEOUT_MS): Promise<void> {
+    const result = await this.run(["push"], timeoutMs);
     if (result.exitCode !== 0) {
       throw new Error(result.stderr || result.stdout || "git push failed");
     }
@@ -480,7 +483,13 @@ export class GitService {
           resolve({
             exitCode,
             stdout: trimStdout ? stdout.trim() : stdout,
-            stderr: (stderr || error?.message || "").trim(),
+            // execFile kills timed-out processes; make that explicit so the
+            // caller can treat it like a transient network failure.
+            stderr: (
+              stderr ||
+              (error?.killed ? "command timed out" : error?.message) ||
+              ""
+            ).trim(),
           });
         },
       );
