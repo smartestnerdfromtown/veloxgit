@@ -6,6 +6,8 @@ import { CredentialsModal, type GitIdentity } from "./src/credentials-modal";
 import { DiffModal } from "./src/diff-modal";
 import { describeError } from "./src/error-utils";
 import { GitService, type FileChange, type GitEnvironment } from "./src/git-service";
+import { isNetworkError, isOnline } from "./src/network";
+import { PushRetryTimer } from "./src/push-retry";
 import { DEFAULT_SETTINGS, normalizeSettings, type VeloxGitSettings } from "./src/settings";
 import { VeloxGitSettingTab } from "./src/settings-tab";
 import { VeloxGitView, VIEW_TYPE_VELOXGIT } from "./src/veloxgit-view";
@@ -30,6 +32,10 @@ export default class VeloxGitPlugin extends Plugin {
   private autoSync: AutoSyncEngine | null = null;
   private view: VeloxGitView | null = null;
   private isGitBusy = false;
+  private pendingPush = false;
+  private readonly pushRetry = new PushRetryTimer(() => {
+    if (this.pendingPush) void this.silentSync();
+  });
 
   onload(): void {
     // Status bar text doubles as a lightweight environment indicator.
@@ -107,6 +113,10 @@ export default class VeloxGitPlugin extends Plugin {
       }),
     );
 
+    // Reflect connectivity changes and retry queued pushes when back online.
+    this.registerDomEvent(window, "offline", () => this.setOfflineStatus());
+    this.registerDomEvent(window, "online", () => this.handleOnline());
+
     // Load settings first, then start Git checks and background timers.
     void this.bootstrap().catch((error) => {
       console.error("[VeloxGit] Initialization failed", error);
@@ -126,6 +136,8 @@ export default class VeloxGitPlugin extends Plugin {
     }
     this.syncIndicatorEl = null;
     this.isGitBusy = false;
+    this.pendingPush = false;
+    this.clearPushRetry();
 
     this.identityModal?.close();
     this.identityModal = null;
@@ -196,14 +208,18 @@ export default class VeloxGitPlugin extends Plugin {
 
     if (!git || !env?.available || !env.isRepo) return;
     if (!env.userName || !env.userEmail) return;
-    // A manual Git action owns the lock; skip this tick and retry later.
-    if (!this.tryAcquireGit()) return;
+    // A manual Git action owns the lock; retry this queued push shortly.
+    if (!this.tryAcquireGit()) {
+      if (this.pendingPush) this.schedulePushRetry();
+      return;
+    }
 
     this.showSyncStatus("⟳ VeloxGit: syncing");
 
     try {
       if (!(await this.ensureIndexUnlocked(git))) {
         this.showSyncStatus("VeloxGit: git index locked", 6000);
+        if (this.pendingPush) this.schedulePushRetry();
         return;
       }
 
@@ -212,20 +228,61 @@ export default class VeloxGitPlugin extends Plugin {
         `auto-save: ${formatTimestamp()}`,
       );
 
-      if (!committed) {
+      // No local changes and nothing queued from an earlier offline run.
+      if (!committed && !this.pendingPush) {
         this.showSyncStatus("");
         return;
       }
 
+      if (!isOnline()) {
+        this.pendingPush = true;
+        this.showSyncStatus("Offline (Commits queued)");
+        this.schedulePushRetry();
+        return;
+      }
+
       await git.push();
+      this.pendingPush = false;
+      this.clearPushRetry();
       this.showSyncStatus("✓ VeloxGit: saved", 2500);
       this.refreshChanges();
     } catch (error) {
-      console.warn("[VeloxGit] silent sync failed", error);
-      this.showSyncStatus("VeloxGit: sync failed", 6000);
+      if (isNetworkError(error) || !isOnline()) {
+        // Local commits stay safe; retry with backoff until the push lands.
+        this.pendingPush = true;
+        this.showSyncStatus("Offline (Commits queued)");
+        this.schedulePushRetry();
+        console.warn("[VeloxGit] push postponed; remote unreachable");
+      } else {
+        console.warn("[VeloxGit] silent sync failed", error);
+        this.showSyncStatus("VeloxGit: sync failed", 6000);
+      }
     } finally {
       this.releaseGit();
     }
+  }
+
+  private setOfflineStatus(): void {
+    this.showSyncStatus(this.pendingPush ? "Offline (Commits queued)" : "Offline");
+  }
+
+  private handleOnline(): void {
+    this.showSyncStatus("");
+    if (!this.pendingPush) return;
+
+    // The event can fire before DNS/SSH is usable; silentSync() reschedules
+    // itself on failure, so an immediate attempt is safe.
+    this.clearPushRetry();
+    void this.silentSync();
+  }
+
+  /** Retries a queued push with backoff, independent of OS online events. */
+  private schedulePushRetry(): void {
+    if (this.pendingPush) this.pushRetry.schedule();
+  }
+
+  private clearPushRetry(): void {
+    this.pushRetry.cancel();
   }
 
   private showSyncStatus(text: string, clearAfterMs?: number): void {
@@ -572,6 +629,14 @@ export default class VeloxGitPlugin extends Plugin {
     const git = this.requireGit();
     if (!git) return;
 
+    if (!isOnline()) {
+      this.pendingPush = true;
+      this.showSyncStatus("Offline (Commits queued)");
+      this.schedulePushRetry();
+      new Notice("VeloxGit: offline. Push postponed until connectivity returns.", 5000);
+      return;
+    }
+
     if (!this.tryAcquireGit()) {
       this.notifyGitBusy();
       return;
@@ -582,16 +647,27 @@ export default class VeloxGitPlugin extends Plugin {
 
     try {
       await git.push();
+      this.pendingPush = false;
+      this.clearPushRetry();
       const elapsed = Math.round(performance.now() - started);
       console.debug(`[VeloxGit] pushed in ${elapsed} ms`);
       progress.setMessage(`VeloxGit: push complete in ${elapsed} ms.`);
       window.setTimeout(() => progress.hide(), 3000);
       this.refreshChanges();
     } catch (error) {
-      const elapsed = Math.round(performance.now() - started);
-      console.error("[VeloxGit] Push failed", error);
-      progress.setMessage(`VeloxGit: push failed after ${elapsed} ms.\n${describeError(error)}`);
-      window.setTimeout(() => progress.hide(), 10000);
+      if (isNetworkError(error) || !isOnline()) {
+        this.pendingPush = true;
+        this.showSyncStatus("Offline (Commits queued)");
+        this.schedulePushRetry();
+        console.warn("[VeloxGit] push postponed; remote unreachable");
+        progress.setMessage("VeloxGit: offline. Push will retry when online.");
+        window.setTimeout(() => progress.hide(), 5000);
+      } else {
+        const elapsed = Math.round(performance.now() - started);
+        console.error("[VeloxGit] Push failed", error);
+        progress.setMessage(`VeloxGit: push failed after ${elapsed} ms.\n${describeError(error)}`);
+        window.setTimeout(() => progress.hide(), 10000);
+      }
     } finally {
       this.releaseGit();
     }
@@ -600,6 +676,12 @@ export default class VeloxGitPlugin extends Plugin {
   private async pull(): Promise<void> {
     const git = this.requireGit();
     if (!git) return;
+
+    if (!isOnline()) {
+      this.setOfflineStatus();
+      new Notice("VeloxGit: offline. Pull postponed until connectivity returns.", 5000);
+      return;
+    }
 
     if (!this.tryAcquireGit()) {
       this.notifyGitBusy();
@@ -648,10 +730,17 @@ export default class VeloxGitPlugin extends Plugin {
       window.setTimeout(() => progress.hide(), sticky ? 15000 : 3000);
       this.refreshChanges();
     } catch (error) {
-      const elapsed = Math.round(performance.now() - started);
-      console.error("[VeloxGit] Pull failed", error);
-      progress.setMessage(`VeloxGit: pull failed after ${elapsed} ms.\n${describeError(error)}`);
-      window.setTimeout(() => progress.hide(), 10000);
+      if (isNetworkError(error) || !isOnline()) {
+        this.setOfflineStatus();
+        console.warn("[VeloxGit] pull postponed; remote unreachable");
+        progress.setMessage("VeloxGit: offline. Pull will retry later.");
+        window.setTimeout(() => progress.hide(), 5000);
+      } else {
+        const elapsed = Math.round(performance.now() - started);
+        console.error("[VeloxGit] Pull failed", error);
+        progress.setMessage(`VeloxGit: pull failed after ${elapsed} ms.\n${describeError(error)}`);
+        window.setTimeout(() => progress.hide(), 10000);
+      }
     } finally {
       this.releaseGit();
     }
