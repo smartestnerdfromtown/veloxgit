@@ -11,11 +11,13 @@ export interface AutoSyncCallbacks {
   onAutoSaveTick: () => void;
   /** Fired once after `INACTIVITY_DELAY_MS` without vault activity. */
   onInactivitySync: () => void;
+  /** Fired when Obsidian loses focus or the document becomes hidden. */
+  onWindowLeave: () => void;
 }
 
 /**
- * Owns every background timer. Callbacks are fire-and-forget so the
- * Electron UI thread is never blocked by scheduled work.
+ * Owns every background timer and window-lifecycle listener. Callbacks are
+ * fire-and-forget so the Electron UI thread is never blocked.
  */
 export class AutoSyncEngine {
   private intervalId: number | null = null;
@@ -31,7 +33,11 @@ export class AutoSyncEngine {
   }
 
   start(): void {
+    if (!this.stopped) return;
+
     this.stopped = false;
+    window.addEventListener("blur", this.handleWindowBlur);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.restartAutoSaveTimer();
   }
 
@@ -59,12 +65,29 @@ export class AutoSyncEngine {
     }, INACTIVITY_DELAY_MS);
   }
 
-  /** Cancels every pending timer. Called from `onunload()`. */
+  /** Cancels every pending timer and unregisters lifecycle listeners. */
   dispose(): void {
     this.stopped = true;
+    window.removeEventListener("blur", this.handleWindowBlur);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.clearAutoSaveTimer();
     this.clearInactivityTimer();
   }
+
+  /**
+   * `blur` also fires for in-app focus changes on some platforms, so the
+   * definitive check is whether the document actually lost focus.
+   */
+  private readonly handleWindowBlur = (): void => {
+    if (this.stopped || document.hasFocus()) return;
+    this.invoke(this.callbacks.onWindowLeave);
+  };
+
+  /** Only a transition to hidden counts; becoming visible must not sync. */
+  private readonly handleVisibilityChange = (): void => {
+    if (this.stopped || !document.hidden) return;
+    this.invoke(this.callbacks.onWindowLeave);
+  };
 
   private restartAutoSaveTimer(): void {
     this.clearAutoSaveTimer();
@@ -91,12 +114,12 @@ export class AutoSyncEngine {
     }
   }
 
-  /** A throwing callback must not break the timer loop. */
+  /** A throwing callback must not break timers or lifecycle listeners. */
   private invoke(callback: () => void): void {
     try {
       callback();
     } catch (error) {
-      console.error("[VeloxGit] background timer callback failed", error);
+      console.error("[VeloxGit] background callback failed", error);
     }
   }
 }

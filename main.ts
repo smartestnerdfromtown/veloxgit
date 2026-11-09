@@ -164,6 +164,7 @@ export default class VeloxGitPlugin extends Plugin {
     this.autoSync = new AutoSyncEngine(this.settings, {
       onAutoSaveTick: () => this.handleAutoSaveTick(),
       onInactivitySync: () => this.handleInactivitySync(),
+      onWindowLeave: () => this.handleWindowLeave(),
     });
     this.autoSync.start();
 
@@ -195,6 +196,14 @@ export default class VeloxGitPlugin extends Plugin {
 
   private handleInactivitySync(): void {
     void this.silentSync(false);
+  }
+
+  /**
+   * Placeholder for Auto-Exit Sync. The Git pipeline is wired in a later
+   * step; this only proves the blur/visibility triggers fire.
+   */
+  private handleWindowLeave(): void {
+    console.debug("[VeloxGit] window left");
   }
 
   /**
