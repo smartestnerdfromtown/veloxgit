@@ -44,6 +44,7 @@ export default class VeloxGitPlugin extends Plugin {
   private isSyncing = false;
   private pendingPush = false;
   private leaveSyncTimer: number | null = null;
+  private leaveCheckInFlight = false;
   private lastLeaveSyncAt = 0;
   private readonly pushRetry = new PushRetryTimer(() => {
     if (this.pendingPush) void this.silentSync();
@@ -143,6 +144,7 @@ export default class VeloxGitPlugin extends Plugin {
       window.clearTimeout(this.leaveSyncTimer);
       this.leaveSyncTimer = null;
     }
+    this.leaveCheckInFlight = false;
 
     // Stop every background timer before tearing anything else down.
     this.autoSync?.dispose();
@@ -225,18 +227,44 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   /**
-   * App switch or minimize. The short debounce coalesces overlapping blur and
-   * visibility events, a 30 s cooldown discards rapid back-and-forth toggles,
-   * and an empty commit guarantees the marker appears in `git log`.
+   * App switch or minimize. A fast porcelain check runs first: on a clean tree
+   * the whole stage/commit/push pipeline is skipped on the microtask queue.
+   * The debounce coalesces overlapping events and a 30 s cooldown discards
+   * rapid back-and-forth toggles.
    */
   private handleWindowLeave(): void {
     if (!this.settings.syncOnExitOrBlur) return;
+    if (this.leaveCheckInFlight || this.isSyncing || this.isGitBusy) return;
+    if (this.isLeaveCooldownActive()) return;
+
+    const git = this.git;
+    const env = this.environment;
+    if (!git || !env?.available || !env.isRepo) return;
+    if (!env.userName || !env.userEmail) return;
+
+    this.leaveCheckInFlight = true;
+    void git
+      .hasChanges()
+      .then((hasChanges) => {
+        this.leaveCheckInFlight = false;
+        if (!hasChanges && !this.pendingPush) return;
+        this.scheduleLeaveSync();
+      })
+      .catch((error) => {
+        this.leaveCheckInFlight = false;
+        console.debug("[VeloxGit] window-leave status check failed", error);
+        this.scheduleLeaveSync();
+      });
+  }
+
+  private scheduleLeaveSync(): void {
+    if (!this.autoSync || !this.settings.syncOnExitOrBlur) return;
     if (this.isLeaveCooldownActive()) return;
     if (this.leaveSyncTimer !== null) window.clearTimeout(this.leaveSyncTimer);
 
     this.leaveSyncTimer = window.setTimeout(() => {
       this.leaveSyncTimer = null;
-      if (!this.settings.syncOnExitOrBlur) return;
+      if (!this.autoSync || !this.settings.syncOnExitOrBlur) return;
       // Another trigger may have completed while this timer was pending.
       if (this.isLeaveCooldownActive()) return;
 

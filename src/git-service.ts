@@ -298,6 +298,22 @@ export class GitService {
     return parseStatus(result.stdout);
   }
 
+  /**
+   * Fast dirty check for the window-leave fast path. Empty porcelain output
+   * means the working tree matches HEAD, so no stage/commit/push is needed.
+   */
+  async hasChanges(): Promise<boolean> {
+    const result = await this.run(
+      ["--no-optional-locks", "status", "--porcelain=v1"],
+      STATUS_TIMEOUT_MS,
+      false,
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr || "git status failed");
+    }
+    return result.stdout.length > 0;
+  }
+
   /** Local branch names for the switch modal. */
   async listBranches(): Promise<string[]> {
     const result = await this.run(
