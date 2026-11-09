@@ -321,7 +321,7 @@ export default class VeloxGitPlugin extends Plugin {
     if (!env.userName || !env.userEmail) return;
     // A manual Git action owns the lock; retry this queued push shortly.
     if (!this.tryAcquireGit()) {
-      if (this.pendingPush) this.schedulePushRetry();
+      if (this.pendingPush && isOnline()) this.schedulePushRetry();
       return;
     }
 
@@ -331,7 +331,7 @@ export default class VeloxGitPlugin extends Plugin {
     try {
       if (!(await this.ensureIndexUnlocked(git))) {
         this.showSyncStatus("VeloxGit: git index locked", 6000);
-        if (this.pendingPush) this.schedulePushRetry();
+        if (this.pendingPush && isOnline()) this.schedulePushRetry();
         return;
       }
 
@@ -355,7 +355,7 @@ export default class VeloxGitPlugin extends Plugin {
         if (committed || this.pendingPush) {
           this.pendingPush = true;
           this.showSyncStatus("Offline (Commits queued)");
-          this.schedulePushRetry();
+          // No retry timer while offline: the online event resumes the push.
         } else {
           this.showSyncStatus("");
         }
@@ -388,8 +388,18 @@ export default class VeloxGitPlugin extends Plugin {
 
       this.refreshChanges();
     } catch (error) {
-      if (isNetworkError(error) || !isOnline()) {
-        // Local commits stay safe; retry with backoff until the push lands.
+      if (!isOnline()) {
+        // Local commits stay safe; wait for the online event instead of
+        // burning timers and spawning processes while disconnected.
+        if (committed || this.pendingPush) {
+          this.pendingPush = true;
+          this.showSyncStatus("Offline (Commits queued)");
+        } else {
+          this.setOfflineStatus();
+        }
+        console.debug("[VeloxGit] push postponed; offline");
+      } else if (isNetworkError(error)) {
+        // Remote was reachable but dropped mid-push; retry with backoff.
         if (committed || this.pendingPush) {
           this.pendingPush = true;
           this.showSyncStatus("Offline (Commits queued)");
