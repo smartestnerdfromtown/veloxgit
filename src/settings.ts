@@ -7,6 +7,8 @@ export interface VeloxGitSettings {
   syncOnSave: boolean;
   /** Pull remote changes once when Obsidian starts. */
   syncOnStartup: boolean;
+  /** Sync when the window loses focus or the document becomes hidden. */
+  syncOnExitOrBlur: boolean;
 }
 
 export const DEFAULT_SETTINGS: VeloxGitSettings = {
@@ -14,6 +16,7 @@ export const DEFAULT_SETTINGS: VeloxGitSettings = {
   autoSaveInterval: 15,
   syncOnSave: false,
   syncOnStartup: false,
+  syncOnExitOrBlur: true,
 };
 
 /** Coerces persisted data into a valid settings object. */
@@ -34,5 +37,9 @@ export function normalizeSettings(data: unknown): VeloxGitSettings {
       : DEFAULT_SETTINGS.autoSaveInterval,
     syncOnSave: Boolean(stored.syncOnSave),
     syncOnStartup: Boolean(stored.syncOnStartup),
+    syncOnExitOrBlur:
+      stored.syncOnExitOrBlur === undefined
+        ? DEFAULT_SETTINGS.syncOnExitOrBlur
+        : Boolean(stored.syncOnExitOrBlur),
   };
 }

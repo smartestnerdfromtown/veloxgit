@@ -24,6 +24,7 @@ export class AutoSyncEngine {
   private inactivityId: number | null = null;
   private settings: VeloxGitSettings;
   private stopped = true;
+  private leaveListenersAttached = false;
 
   constructor(
     settings: VeloxGitSettings,
@@ -36,8 +37,7 @@ export class AutoSyncEngine {
     if (!this.stopped) return;
 
     this.stopped = false;
-    window.addEventListener("blur", this.handleWindowBlur);
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.syncLeaveListeners();
     this.restartAutoSaveTimer();
   }
 
@@ -45,6 +45,7 @@ export class AutoSyncEngine {
     this.settings = settings;
     if (this.stopped) return;
 
+    this.syncLeaveListeners();
     this.restartAutoSaveTimer();
     if (!settings.syncOnSave) {
       this.clearInactivityTimer();
@@ -68,10 +69,34 @@ export class AutoSyncEngine {
   /** Cancels every pending timer and unregisters lifecycle listeners. */
   dispose(): void {
     this.stopped = true;
-    window.removeEventListener("blur", this.handleWindowBlur);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.detachLeaveListeners();
     this.clearAutoSaveTimer();
     this.clearInactivityTimer();
+  }
+
+  /** Attaches or detaches blur/visibility listeners from the current setting. */
+  private syncLeaveListeners(): void {
+    if (this.settings.syncOnExitOrBlur) {
+      this.attachLeaveListeners();
+    } else {
+      this.detachLeaveListeners();
+    }
+  }
+
+  private attachLeaveListeners(): void {
+    if (this.leaveListenersAttached) return;
+
+    window.addEventListener("blur", this.handleWindowBlur);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.leaveListenersAttached = true;
+  }
+
+  private detachLeaveListeners(): void {
+    if (!this.leaveListenersAttached) return;
+
+    window.removeEventListener("blur", this.handleWindowBlur);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.leaveListenersAttached = false;
   }
 
   /**

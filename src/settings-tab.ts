@@ -75,5 +75,15 @@ export class VeloxGitSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    new Setting(containerEl)
+      .setName("Sync when leaving window")
+      .setDesc("Run a background sync when Obsidian loses focus or is minimized.")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.syncOnExitOrBlur).onChange(async (value) => {
+          this.plugin.settings.syncOnExitOrBlur = value;
+          await this.plugin.saveSettings();
+        });
+      });
   }
 }

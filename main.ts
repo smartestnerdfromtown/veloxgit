@@ -154,6 +154,7 @@ export default class VeloxGitPlugin extends Plugin {
     }
     this.syncIndicatorEl = null;
     this.isGitBusy = false;
+    this.isSyncing = false;
     this.pendingPush = false;
     this.clearPushRetry();
 
@@ -205,6 +206,13 @@ export default class VeloxGitPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+
+    // Disabling the feature must also drop a debounced leave sync.
+    if (!this.settings.syncOnExitOrBlur && this.leaveSyncTimer !== null) {
+      window.clearTimeout(this.leaveSyncTimer);
+      this.leaveSyncTimer = null;
+    }
+
     this.autoSync?.updateSettings(this.settings);
   }
 
@@ -222,11 +230,13 @@ export default class VeloxGitPlugin extends Plugin {
    * and an empty commit guarantees the marker appears in `git log`.
    */
   private handleWindowLeave(): void {
+    if (!this.settings.syncOnExitOrBlur) return;
     if (this.isLeaveCooldownActive()) return;
     if (this.leaveSyncTimer !== null) window.clearTimeout(this.leaveSyncTimer);
 
     this.leaveSyncTimer = window.setTimeout(() => {
       this.leaveSyncTimer = null;
+      if (!this.settings.syncOnExitOrBlur) return;
       // Another trigger may have completed while this timer was pending.
       if (this.isLeaveCooldownActive()) return;
 
