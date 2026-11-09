@@ -38,6 +38,7 @@ export default class VeloxGitPlugin extends Plugin {
   private autoSync: AutoSyncEngine | null = null;
   private view: VeloxGitView | null = null;
   private isGitBusy = false;
+  private isSyncing = false;
   private pendingPush = false;
   private leaveSyncTimer: number | null = null;
   private lastLeaveSyncAt = 0;
@@ -238,6 +239,25 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   /**
+   * Atomic gate for background sync jobs. Any overlapping trigger is dropped
+   * immediately so two silent syncs can never race on the Git index.
+   */
+  private async silentSync(
+    pullFirst = false,
+    message = `auto-save: ${formatTimestamp()}`,
+    allowEmpty = false,
+  ): Promise<void> {
+    if (this.isSyncing) return;
+
+    this.isSyncing = true;
+    try {
+      await this.runSilentSync(pullFirst, message, allowEmpty);
+    } finally {
+      this.isSyncing = false;
+    }
+  }
+
+  /**
    * Background sync pipeline: guard conflicts → add → commit → optional pull
    * → push. No modals; failures are logged and reflected in the status bar.
    *
@@ -245,10 +265,10 @@ export default class VeloxGitPlugin extends Plugin {
    * remote changes are merged while local edits are already committed.
    * `allowEmpty` makes the window-leave sync commit a marker on a clean tree.
    */
-  private async silentSync(
-    pullFirst = false,
-    message = `auto-save: ${formatTimestamp()}`,
-    allowEmpty = false,
+  private async runSilentSync(
+    pullFirst: boolean,
+    message: string,
+    allowEmpty: boolean,
   ): Promise<void> {
     const git = this.git;
     const env = this.environment;
