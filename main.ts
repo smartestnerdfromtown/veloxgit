@@ -233,7 +233,7 @@ export default class VeloxGitPlugin extends Plugin {
       this.lastLeaveSyncAt = Date.now();
       const message = `Window left at ${formatTimestamp(undefined, true)}`;
       console.debug(`[VeloxGit] ${message}`);
-      void this.silentSync(false, message, true);
+      void this.silentSync(false, message, true, true);
     }, LEAVE_SYNC_DELAY_MS);
   }
 
@@ -249,12 +249,13 @@ export default class VeloxGitPlugin extends Plugin {
     pullFirst = false,
     message = `auto-save: ${formatTimestamp()}`,
     allowEmpty = false,
+    quiet = false,
   ): Promise<void> {
     if (this.isSyncing) return;
 
     this.isSyncing = true;
     try {
-      await this.runSilentSync(pullFirst, message, allowEmpty);
+      await this.runSilentSync(pullFirst, message, allowEmpty, quiet);
     } finally {
       this.isSyncing = false;
     }
@@ -267,11 +268,13 @@ export default class VeloxGitPlugin extends Plugin {
    * `pullFirst` is used on startup and on the auto-save interval so incoming
    * remote changes are merged while local edits are already committed.
    * `allowEmpty` makes the window-leave sync commit a marker on a clean tree.
+   * `quiet` suppresses Notices and panel activation for blur/exit syncs.
    */
   private async runSilentSync(
     pullFirst: boolean,
     message: string,
     allowEmpty: boolean,
+    quiet: boolean,
   ): Promise<void> {
     const git = this.git;
     const env = this.environment;
@@ -297,7 +300,7 @@ export default class VeloxGitPlugin extends Plugin {
       // Never stage or commit on top of unresolved conflicts.
       const status = await git.getStatus();
       if (status.changes.some((change) => change.kind === "conflict")) {
-        await this.handlePullConflict();
+        await this.handlePullConflict(quiet);
         return;
       }
 
@@ -325,7 +328,7 @@ export default class VeloxGitPlugin extends Plugin {
       if (pullFirst) {
         pulled = await git.pull();
         if (pulled.outcome === "conflict") {
-          await this.handlePullConflict();
+          await this.handlePullConflict(quiet);
           return;
         }
       }
@@ -356,9 +359,9 @@ export default class VeloxGitPlugin extends Plugin {
         } else {
           this.setOfflineStatus();
         }
-        console.warn("[VeloxGit] push postponed; remote unreachable");
+        console.debug("[VeloxGit] push postponed; remote unreachable");
       } else {
-        console.warn("[VeloxGit] silent sync failed", error);
+        console.debug("[VeloxGit] silent sync failed", error);
         this.showSyncStatus("VeloxGit: sync failed", 6000);
       }
     } finally {
@@ -367,11 +370,11 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   /**
-   * A background pull left unmerged files. Stop every automation path and
-   * bring the conflicts into view so the user can resolve them.
+   * A background pull left unmerged files. Stop every automation path and,
+   * unless this was a quiet blur/exit sync, bring the conflicts into view.
    */
-  private async handlePullConflict(): Promise<void> {
-    console.warn("[VeloxGit] background pull conflict; disabling auto-sync");
+  private async handlePullConflict(quiet = false): Promise<void> {
+    console.debug("[VeloxGit] background pull conflict; disabling auto-sync");
 
     // Stop retries first so nothing touches the conflicted index.
     this.pendingPush = false;
@@ -381,7 +384,10 @@ export default class VeloxGitPlugin extends Plugin {
     this.settings.syncOnSave = false;
     await this.saveSettings();
 
+    // A subtle status bar hint is enough for quiet syncs; no popups.
     this.showSyncStatus("VeloxGit: merge conflict", 15000);
+    if (quiet) return;
+
     new Notice(
       "VeloxGit: background pull stopped with conflicts. Auto-sync disabled; resolve the conflicting files, then re-enable it.",
       15000,
@@ -575,7 +581,7 @@ export default class VeloxGitPlugin extends Plugin {
     if (state === "clear") return true;
 
     if (state === "stale" && (await git.clearStaleIndexLock())) {
-      console.warn("[VeloxGit] removed stale .git/index.lock");
+      console.debug("[VeloxGit] removed stale .git/index.lock");
       return true;
     }
 
