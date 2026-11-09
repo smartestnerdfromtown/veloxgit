@@ -203,10 +203,14 @@ export class GitService {
   /**
    * Commits staged changes when there are any. Returns false instead of
    * throwing for the "nothing to commit" case, which the silent auto-save
-   * pipeline treats as a normal no-op.
+   * pipeline treats as a normal no-op. `allowEmpty` is used by the exit-sync
+   * path so a leave/quit event always leaves a visible marker in git log.
    */
-  async commitIfStaged(message: string): Promise<boolean> {
-    const result = await this.run(["commit", "-m", message], COMMIT_TIMEOUT_MS);
+  async commitIfStaged(message: string, allowEmpty = false): Promise<boolean> {
+    const args = ["commit", "-m", message];
+    if (allowEmpty) args.push("--allow-empty");
+
+    const result = await this.run(args, COMMIT_TIMEOUT_MS);
     if (result.exitCode === 0) return true;
 
     const output = `${result.stderr}\n${result.stdout}`.trim();

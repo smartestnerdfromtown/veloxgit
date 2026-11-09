@@ -12,6 +12,9 @@ import { DEFAULT_SETTINGS, normalizeSettings, type VeloxGitSettings } from "./sr
 import { VeloxGitSettingTab } from "./src/settings-tab";
 import { VeloxGitView, VIEW_TYPE_VELOXGIT } from "./src/veloxgit-view";
 
+/** Coalesces overlapping blur and visibility events into one leave sync. */
+const LEAVE_SYNC_DELAY_MS = 400;
+
 /**
  * VeloxGit - ultra-fast, minimalist Git client for Obsidian.
  *
@@ -33,6 +36,7 @@ export default class VeloxGitPlugin extends Plugin {
   private view: VeloxGitView | null = null;
   private isGitBusy = false;
   private pendingPush = false;
+  private leaveSyncTimer: number | null = null;
   private readonly pushRetry = new PushRetryTimer(() => {
     if (this.pendingPush) void this.silentSync();
   });
@@ -126,6 +130,12 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   onunload(): void {
+    // Cancel a pending window-leave sync before tearing anything else down.
+    if (this.leaveSyncTimer !== null) {
+      window.clearTimeout(this.leaveSyncTimer);
+      this.leaveSyncTimer = null;
+    }
+
     // Stop every background timer before tearing anything else down.
     this.autoSync?.dispose();
     this.autoSync = null;
@@ -199,11 +209,19 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   /**
-   * Placeholder for Auto-Exit Sync. The Git pipeline is wired in a later
-   * step; this only proves the blur/visibility triggers fire.
+   * App switch or minimize. The short debounce coalesces overlapping blur and
+   * visibility events, and an empty commit guarantees the marker appears in
+   * `git log` even when nothing changed.
    */
   private handleWindowLeave(): void {
-    console.debug("[VeloxGit] window left");
+    if (this.leaveSyncTimer !== null) window.clearTimeout(this.leaveSyncTimer);
+
+    this.leaveSyncTimer = window.setTimeout(() => {
+      this.leaveSyncTimer = null;
+      const message = `Window left at ${formatTimestamp(undefined, true)}`;
+      console.debug(`[VeloxGit] ${message}`);
+      void this.silentSync(false, message, true);
+    }, LEAVE_SYNC_DELAY_MS);
   }
 
   /**
@@ -212,8 +230,13 @@ export default class VeloxGitPlugin extends Plugin {
    *
    * `pullFirst` is used on startup and on the auto-save interval so incoming
    * remote changes are merged while local edits are already committed.
+   * `allowEmpty` makes the window-leave sync commit a marker on a clean tree.
    */
-  private async silentSync(pullFirst = false): Promise<void> {
+  private async silentSync(
+    pullFirst = false,
+    message = `auto-save: ${formatTimestamp()}`,
+    allowEmpty = false,
+  ): Promise<void> {
     const git = this.git;
     const env = this.environment;
 
@@ -242,10 +265,13 @@ export default class VeloxGitPlugin extends Plugin {
         return;
       }
 
-      // Skip two Git spawns when the working tree is already clean.
+      // Skip two Git spawns when the working tree is already clean, unless
+      // this sync must leave an empty window-leave marker.
       if (status.changes.length > 0) {
         await git.stageAll();
-        committed = await git.commitIfStaged(`auto-save: ${formatTimestamp()}`);
+        committed = await git.commitIfStaged(message, allowEmpty);
+      } else if (allowEmpty) {
+        committed = await git.commitIfStaged(message, true);
       }
 
       if (!isOnline()) {
@@ -882,8 +908,9 @@ export default class VeloxGitPlugin extends Plugin {
   }
 }
 
-/** Local time formatted as YYYY-MM-DD HH:mm for the auto-save commit message. */
-function formatTimestamp(date = new Date()): string {
+/** Local time formatted as YYYY-MM-DD HH:mm (or HH:mm:ss) for commit messages. */
+function formatTimestamp(date = new Date(), withSeconds = false): string {
   const pad = (value: number): string => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const base = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return withSeconds ? `${base}:${pad(date.getSeconds())}` : base;
 }

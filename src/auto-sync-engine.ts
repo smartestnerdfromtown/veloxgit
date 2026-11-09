@@ -75,11 +75,12 @@ export class AutoSyncEngine {
   }
 
   /**
-   * `blur` also fires for in-app focus changes on some platforms, so the
-   * definitive check is whether the document actually lost focus.
+   * A `blur` on the window means focus definitively left the Obsidian window.
+   * Checking `document.hasFocus()` here is unreliable because the focus state
+   * is not updated yet while the event is being dispatched.
    */
   private readonly handleWindowBlur = (): void => {
-    if (this.stopped || document.hasFocus()) return;
+    if (this.stopped) return;
     this.invoke(this.callbacks.onWindowLeave);
   };
 
