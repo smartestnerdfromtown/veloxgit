@@ -15,6 +15,9 @@ import { VeloxGitView, VIEW_TYPE_VELOXGIT } from "./src/veloxgit-view";
 /** Coalesces overlapping blur and visibility events into one leave sync. */
 const LEAVE_SYNC_DELAY_MS = 400;
 
+/** Minimum gap between window-leave syncs to avoid rapid app-switch spam. */
+const LEAVE_SYNC_COOLDOWN_MS = 30_000;
+
 /**
  * VeloxGit - ultra-fast, minimalist Git client for Obsidian.
  *
@@ -37,6 +40,7 @@ export default class VeloxGitPlugin extends Plugin {
   private isGitBusy = false;
   private pendingPush = false;
   private leaveSyncTimer: number | null = null;
+  private lastLeaveSyncAt = 0;
   private readonly pushRetry = new PushRetryTimer(() => {
     if (this.pendingPush) void this.silentSync();
   });
@@ -210,18 +214,27 @@ export default class VeloxGitPlugin extends Plugin {
 
   /**
    * App switch or minimize. The short debounce coalesces overlapping blur and
-   * visibility events, and an empty commit guarantees the marker appears in
-   * `git log` even when nothing changed.
+   * visibility events, a 30 s cooldown discards rapid back-and-forth toggles,
+   * and an empty commit guarantees the marker appears in `git log`.
    */
   private handleWindowLeave(): void {
+    if (this.isLeaveCooldownActive()) return;
     if (this.leaveSyncTimer !== null) window.clearTimeout(this.leaveSyncTimer);
 
     this.leaveSyncTimer = window.setTimeout(() => {
       this.leaveSyncTimer = null;
+      // Another trigger may have completed while this timer was pending.
+      if (this.isLeaveCooldownActive()) return;
+
+      this.lastLeaveSyncAt = Date.now();
       const message = `Window left at ${formatTimestamp(undefined, true)}`;
       console.debug(`[VeloxGit] ${message}`);
       void this.silentSync(false, message, true);
     }, LEAVE_SYNC_DELAY_MS);
+  }
+
+  private isLeaveCooldownActive(): boolean {
+    return Date.now() - this.lastLeaveSyncAt < LEAVE_SYNC_COOLDOWN_MS;
   }
 
   /**
