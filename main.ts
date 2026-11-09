@@ -29,10 +29,7 @@ export default class VeloxGitPlugin extends Plugin {
   private branchModal: BranchModal | null = null;
   private autoSync: AutoSyncEngine | null = null;
   private view: VeloxGitView | null = null;
-  private staging = false;
-  private pushing = false;
-  private pulling = false;
-  private syncing = false;
+  private isGitBusy = false;
 
   onload(): void {
     // Status bar text doubles as a lightweight environment indicator.
@@ -128,7 +125,7 @@ export default class VeloxGitPlugin extends Plugin {
       this.syncStatusTimer = null;
     }
     this.syncIndicatorEl = null;
-    this.syncing = false;
+    this.isGitBusy = false;
 
     this.identityModal?.close();
     this.identityModal = null;
@@ -199,13 +196,17 @@ export default class VeloxGitPlugin extends Plugin {
 
     if (!git || !env?.available || !env.isRepo) return;
     if (!env.userName || !env.userEmail) return;
-    if (this.syncing || this.staging || this.pushing || this.pulling) return;
+    // A manual Git action owns the lock; skip this tick and retry later.
+    if (!this.tryAcquireGit()) return;
 
-    this.syncing = true;
     this.showSyncStatus("⟳ VeloxGit: syncing");
-    // const started = performance.now();
 
     try {
+      if (!(await this.ensureIndexUnlocked(git))) {
+        this.showSyncStatus("VeloxGit: git index locked", 6000);
+        return;
+      }
+
       await git.stageAll();
       const committed = await git.commitIfStaged(
         `auto-save: ${formatTimestamp()}`,
@@ -217,21 +218,13 @@ export default class VeloxGitPlugin extends Plugin {
       }
 
       await git.push();
-      // const seconds = Math.max(
-      //   1,
-      //   Math.round((performance.now() - started) / 1000),
-      // );
-      // new Notice(
-      //   `VeloxGit handled auto-sync ${seconds} seconds ago. Thank you for using it!`,
-      //   4000,
-      // );
       this.showSyncStatus("✓ VeloxGit: saved", 2500);
       this.refreshChanges();
     } catch (error) {
       console.warn("[VeloxGit] silent sync failed", error);
       this.showSyncStatus("VeloxGit: sync failed", 6000);
     } finally {
-      this.syncing = false;
+      this.releaseGit();
     }
   }
 
@@ -368,6 +361,44 @@ export default class VeloxGitPlugin extends Plugin {
     return git;
   }
 
+  /**
+   * Single mutex for Git writes. Manual actions tell the user when another
+   * action owns it; the background auto-sync silently skips its turn.
+   */
+  private tryAcquireGit(): boolean {
+    if (this.isGitBusy) return false;
+    this.isGitBusy = true;
+    return true;
+  }
+
+  private releaseGit(): void {
+    this.isGitBusy = false;
+  }
+
+  private notifyGitBusy(): void {
+    new Notice("VeloxGit: another Git operation is running. Try again in a moment.", 3000);
+  }
+
+  /**
+   * Refuses to start a write while `.git/index.lock` exists. Stale locks are
+   * removed; fresh ones belong to another Git process.
+   */
+  private async ensureIndexUnlocked(git: GitService): Promise<boolean> {
+    const state = await git.checkIndexLock();
+    if (state === "clear") return true;
+
+    if (state === "stale" && (await git.clearStaleIndexLock())) {
+      console.warn("[VeloxGit] removed stale .git/index.lock");
+      return true;
+    }
+
+    return false;
+  }
+
+  private indexLockedMessage(): string {
+    return "VeloxGit: another Git process is using this repository (.git/index.lock exists).";
+  }
+
   /** Re-renders the sidebar list only when the panel is actually open. */
   private refreshChanges(): void {
     if (!this.view) return;
@@ -410,8 +441,8 @@ export default class VeloxGitPlugin extends Plugin {
     const git = this.requireGit();
     if (!git) return;
 
-    if (this.staging || this.pushing || this.pulling) {
-      new Notice("VeloxGit: finish the current Git action first.");
+    if (this.isGitBusy) {
+      this.notifyGitBusy();
       return;
     }
 
@@ -434,21 +465,35 @@ export default class VeloxGitPlugin extends Plugin {
       status.branch,
       branches,
       async (branch, create) => {
-        const started = performance.now();
-        if (create) {
-          await git.createBranch(branch);
-        } else {
-          await git.checkoutBranch(branch);
+        if (!this.tryAcquireGit()) {
+          throw new Error("Another Git operation is running. Try again in a moment.");
         }
-        const elapsed = Math.round(performance.now() - started);
-        console.debug(`[VeloxGit] branch ${create ? "created" : "switched"}: ${branch} in ${elapsed} ms`);
-        new Notice(
-          create
-            ? `VeloxGit: created and switched to ${branch} in ${elapsed} ms.`
-            : `VeloxGit: switched to ${branch} in ${elapsed} ms.`,
-          3000,
-        );
-        this.refreshChanges();
+
+        const started = performance.now();
+
+        try {
+          if (!(await this.ensureIndexUnlocked(git))) {
+            throw new Error(this.indexLockedMessage());
+          }
+
+          if (create) {
+            await git.createBranch(branch);
+          } else {
+            await git.checkoutBranch(branch);
+          }
+
+          const elapsed = Math.round(performance.now() - started);
+          console.debug(`[VeloxGit] branch ${create ? "created" : "switched"}: ${branch} in ${elapsed} ms`);
+          new Notice(
+            create
+              ? `VeloxGit: created and switched to ${branch} in ${elapsed} ms.`
+              : `VeloxGit: switched to ${branch} in ${elapsed} ms.`,
+            3000,
+          );
+          this.refreshChanges();
+        } finally {
+          this.releaseGit();
+        }
       },
       () => {
         if (this.branchModal === modal) this.branchModal = null;
@@ -463,15 +508,19 @@ export default class VeloxGitPlugin extends Plugin {
     const git = this.requireGit();
     if (!git) return;
 
-    if (this.staging) {
-      new Notice("VeloxGit: staging is already running.");
+    if (!this.tryAcquireGit()) {
+      this.notifyGitBusy();
       return;
     }
 
-    this.staging = true;
     const started = performance.now();
 
     try {
+      if (!(await this.ensureIndexUnlocked(git))) {
+        new Notice(this.indexLockedMessage(), 8000);
+        return;
+      }
+
       await git.stageAll();
       const elapsed = Math.round(performance.now() - started);
       console.debug(`[VeloxGit] staged all changes in ${elapsed} ms`);
@@ -481,7 +530,7 @@ export default class VeloxGitPlugin extends Plugin {
       console.error("[VeloxGit] Stage all failed", error);
       new Notice(`VeloxGit: git add . failed.\n${describeError(error)}`, 8000);
     } finally {
-      this.staging = false;
+      this.releaseGit();
     }
   }
 
@@ -495,12 +544,25 @@ export default class VeloxGitPlugin extends Plugin {
     }
 
     this.commitModal = new CommitModal(this.app, async (message) => {
+      if (!this.tryAcquireGit()) {
+        throw new Error("Another Git operation is running. Try again in a moment.");
+      }
+
       const started = performance.now();
-      await git.commit(message);
-      const elapsed = Math.round(performance.now() - started);
-      console.debug(`[VeloxGit] committed in ${elapsed} ms`);
-      new Notice(`VeloxGit: commit created in ${elapsed} ms.`, 3000);
-      this.refreshChanges();
+
+      try {
+        if (!(await this.ensureIndexUnlocked(git))) {
+          throw new Error(this.indexLockedMessage());
+        }
+
+        await git.commit(message);
+        const elapsed = Math.round(performance.now() - started);
+        console.debug(`[VeloxGit] committed in ${elapsed} ms`);
+        new Notice(`VeloxGit: commit created in ${elapsed} ms.`, 3000);
+        this.refreshChanges();
+      } finally {
+        this.releaseGit();
+      }
     });
 
     this.commitModal.open();
@@ -510,12 +572,11 @@ export default class VeloxGitPlugin extends Plugin {
     const git = this.requireGit();
     if (!git) return;
 
-    if (this.pushing) {
-      new Notice("VeloxGit: push is already running.");
+    if (!this.tryAcquireGit()) {
+      this.notifyGitBusy();
       return;
     }
 
-    this.pushing = true;
     const started = performance.now();
     const progress = new Notice("VeloxGit: pushing...", 0);
 
@@ -532,7 +593,7 @@ export default class VeloxGitPlugin extends Plugin {
       progress.setMessage(`VeloxGit: push failed after ${elapsed} ms.\n${describeError(error)}`);
       window.setTimeout(() => progress.hide(), 10000);
     } finally {
-      this.pushing = false;
+      this.releaseGit();
     }
   }
 
@@ -540,16 +601,21 @@ export default class VeloxGitPlugin extends Plugin {
     const git = this.requireGit();
     if (!git) return;
 
-    if (this.pulling) {
-      new Notice("VeloxGit: pull is already running.");
+    if (!this.tryAcquireGit()) {
+      this.notifyGitBusy();
       return;
     }
 
-    this.pulling = true;
     const started = performance.now();
     const progress = new Notice("VeloxGit: pulling...", 0);
 
     try {
+      if (!(await this.ensureIndexUnlocked(git))) {
+        progress.hide();
+        new Notice(this.indexLockedMessage(), 8000);
+        return;
+      }
+
       const result = await git.pull();
       const elapsed = Math.round(performance.now() - started);
       console.debug(`[VeloxGit] pull ${result.outcome} in ${elapsed} ms`, result.output);
@@ -587,7 +653,7 @@ export default class VeloxGitPlugin extends Plugin {
       progress.setMessage(`VeloxGit: pull failed after ${elapsed} ms.\n${describeError(error)}`);
       window.setTimeout(() => progress.hide(), 10000);
     } finally {
-      this.pulling = false;
+      this.releaseGit();
     }
   }
 

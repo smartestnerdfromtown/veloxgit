@@ -13,6 +13,8 @@ const DIFF_TIMEOUT_MS = 15_000;
 const BRANCH_TIMEOUT_MS = 30_000;
 // Commit hooks (e.g. pre-commit) may be slow.
 const COMMIT_TIMEOUT_MS = 60_000;
+// A lock left behind by a crashed Git process older than this is recovered.
+const STALE_INDEX_LOCK_MS = 5 * 60_000;
 // Network operations get a more generous budget.
 const NETWORK_TIMEOUT_MS = 120_000;
 const MAX_BUFFER_BYTES = 1024 * 1024;
@@ -32,6 +34,8 @@ export interface GitCommandResult {
   stdout: string;
   stderr: string;
 }
+
+export type IndexLockState = "clear" | "busy" | "stale";
 
 export type PullOutcome =
   | "up-to-date"
@@ -111,6 +115,61 @@ export class GitService {
   async setIdentity(name: string, email: string): Promise<void> {
     await this.setConfig("user.name", name);
     await this.setConfig("user.email", email);
+  }
+
+  /**
+   * Checks for Git's index lock before a write operation. A fresh lock means
+   * another Git process is active; an old one was probably left by a crash.
+   */
+  async checkIndexLock(): Promise<IndexLockState> {
+    const lockPath = await this.indexLockPath();
+    if (!lockPath) return "clear";
+
+    try {
+      const stats = await fs.stat(lockPath);
+      return Date.now() - stats.mtimeMs > STALE_INDEX_LOCK_MS
+        ? "stale"
+        : "busy";
+    } catch {
+      return "clear";
+    }
+  }
+
+  /** Removes an old `.git/index.lock`. False when missing or still fresh. */
+  async clearStaleIndexLock(): Promise<boolean> {
+    const lockPath = await this.indexLockPath();
+    if (!lockPath) return false;
+
+    try {
+      const stats = await fs.stat(lockPath);
+      if (Date.now() - stats.mtimeMs <= STALE_INDEX_LOCK_MS) return false;
+      await fs.unlink(lockPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Resolves `index.lock` for normal repositories (`.git` directory) and
+   * worktrees (`.git` file containing a `gitdir:` pointer).
+   */
+  private async indexLockPath(): Promise<string | null> {
+    const gitEntry = path.join(this.cwd, ".git");
+
+    try {
+      const stats = await fs.stat(gitEntry);
+      if (stats.isDirectory()) return path.join(gitEntry, "index.lock");
+      if (!stats.isFile()) return null;
+
+      const contents = await fs.readFile(gitEntry, "utf8");
+      const match = /^gitdir:\s*(.+)$/m.exec(contents);
+      if (!match) return null;
+
+      return path.join(path.resolve(this.cwd, match[1].trim()), "index.lock");
+    } catch {
+      return null;
+    }
   }
 
   /**
