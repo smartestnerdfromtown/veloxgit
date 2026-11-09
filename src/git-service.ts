@@ -327,49 +327,60 @@ export class GitService {
   /**
    * Returns the patch for one file.
    *
-   * Unstaged changes come from `git diff`; staged-only changes fall back to
-   * `git diff --cached`. Untracked files have no diff yet, so they are
-   * compared against the empty file to still show their full content.
+   * The porcelain code tells us which side has changes, so we avoid spawning
+   * Git calls that are guaranteed to return an empty diff. Untracked files go
+   * straight to `--no-index`; the empty file provides their full content.
    */
   async getFileDiff(file: FileChange): Promise<string> {
-    const unstaged = await this.run(
-      ["diff", "--", file.path],
-      DIFF_TIMEOUT_MS,
-      false,
-      MAX_DIFF_BYTES,
-    );
-    if (unstaged.exitCode !== 0) {
-      throw new Error(unstaged.stderr || "git diff failed");
-    }
-    if (unstaged.stdout.length > 0) return unstaged.stdout;
-
-    const staged = await this.run(
-      ["diff", "--cached", "--", file.path],
-      DIFF_TIMEOUT_MS,
-      false,
-      MAX_DIFF_BYTES,
-    );
-    if (staged.exitCode !== 0) {
-      throw new Error(staged.stderr || "git diff --cached failed");
-    }
-    if (staged.stdout.length > 0) return staged.stdout;
-
     if (file.kind === "untracked") {
-      const emptyFile = process.platform === "win32" ? "NUL" : "/dev/null";
-      const untracked = await this.run(
-        ["diff", "--no-index", "--", emptyFile, file.path],
+      return this.untrackedDiff(file.path);
+    }
+
+    const indexCode = file.code[0];
+    const worktreeCode = file.code[1];
+
+    if (worktreeCode !== " ") {
+      const unstaged = await this.run(
+        ["diff", "--", file.path],
         DIFF_TIMEOUT_MS,
         false,
         MAX_DIFF_BYTES,
       );
-      // Exit code 1 simply means "differences found".
-      if (untracked.exitCode > 1) {
-        throw new Error(untracked.stderr || "git diff --no-index failed");
+      if (unstaged.exitCode !== 0) {
+        throw new Error(unstaged.stderr || "git diff failed");
       }
-      return untracked.stdout;
+      if (unstaged.stdout.length > 0) return unstaged.stdout;
+    }
+
+    if (indexCode !== " " && indexCode !== "?") {
+      const staged = await this.run(
+        ["diff", "--cached", "--", file.path],
+        DIFF_TIMEOUT_MS,
+        false,
+        MAX_DIFF_BYTES,
+      );
+      if (staged.exitCode !== 0) {
+        throw new Error(staged.stderr || "git diff --cached failed");
+      }
+      if (staged.stdout.length > 0) return staged.stdout;
     }
 
     return "";
+  }
+
+  private async untrackedDiff(filePath: string): Promise<string> {
+    const emptyFile = process.platform === "win32" ? "NUL" : "/dev/null";
+    const untracked = await this.run(
+      ["diff", "--no-index", "--", emptyFile, filePath],
+      DIFF_TIMEOUT_MS,
+      false,
+      MAX_DIFF_BYTES,
+    );
+    // Exit code 1 simply means "differences found".
+    if (untracked.exitCode > 1) {
+      throw new Error(untracked.stderr || "git diff --no-index failed");
+    }
+    return untracked.stdout;
   }
 
   /**

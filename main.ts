@@ -5,7 +5,7 @@ import { CommitModal } from "./src/commit-modal";
 import { CredentialsModal, type GitIdentity } from "./src/credentials-modal";
 import { DiffModal } from "./src/diff-modal";
 import { describeError } from "./src/error-utils";
-import { GitService, type FileChange, type GitEnvironment } from "./src/git-service";
+import { GitService, type FileChange, type GitEnvironment, type PullResult } from "./src/git-service";
 import { isNetworkError, isOnline } from "./src/network";
 import { PushRetryTimer } from "./src/push-retry";
 import { DEFAULT_SETTINGS, normalizeSettings, type VeloxGitSettings } from "./src/settings";
@@ -176,7 +176,7 @@ export default class VeloxGitPlugin extends Plugin {
       this.environment?.available &&
       this.environment.isRepo
     ) {
-      void this.pull();
+      void this.silentSync(true);
     }
   }
 
@@ -190,19 +190,21 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   private handleAutoSaveTick(): void {
-    void this.silentSync();
+    void this.silentSync(true);
   }
 
   private handleInactivitySync(): void {
-    void this.silentSync();
+    void this.silentSync(false);
   }
 
   /**
-   * Background add → commit → push. No modals and no Notice; the only
-   * feedback is a small status-bar indicator. Any error is logged and
-   * shown in the status bar so a bad remote can never interrupt typing.
+   * Background sync pipeline: guard conflicts → add → commit → optional pull
+   * → push. No modals; failures are logged and reflected in the status bar.
+   *
+   * `pullFirst` is used on startup and on the auto-save interval so incoming
+   * remote changes are merged while local edits are already committed.
    */
-  private async silentSync(): Promise<void> {
+  private async silentSync(pullFirst = false): Promise<void> {
     const git = this.git;
     const env = this.environment;
 
@@ -215,6 +217,7 @@ export default class VeloxGitPlugin extends Plugin {
     }
 
     this.showSyncStatus("⟳ VeloxGit: syncing");
+    let committed = false;
 
     try {
       if (!(await this.ensureIndexUnlocked(git))) {
@@ -223,35 +226,65 @@ export default class VeloxGitPlugin extends Plugin {
         return;
       }
 
-      await git.stageAll();
-      const committed = await git.commitIfStaged(
-        `auto-save: ${formatTimestamp()}`,
-      );
-
-      // No local changes and nothing queued from an earlier offline run.
-      if (!committed && !this.pendingPush) {
-        this.showSyncStatus("");
+      // Never stage or commit on top of unresolved conflicts.
+      const status = await git.getStatus();
+      if (status.changes.some((change) => change.kind === "conflict")) {
+        await this.handlePullConflict();
         return;
+      }
+
+      // Skip two Git spawns when the working tree is already clean.
+      if (status.changes.length > 0) {
+        await git.stageAll();
+        committed = await git.commitIfStaged(`auto-save: ${formatTimestamp()}`);
       }
 
       if (!isOnline()) {
-        this.pendingPush = true;
-        this.showSyncStatus("Offline (Commits queued)");
-        this.schedulePushRetry();
+        if (committed || this.pendingPush) {
+          this.pendingPush = true;
+          this.showSyncStatus("Offline (Commits queued)");
+          this.schedulePushRetry();
+        } else {
+          this.showSyncStatus("");
+        }
         return;
       }
 
-      await git.push();
-      this.pendingPush = false;
-      this.clearPushRetry();
-      this.showSyncStatus("✓ VeloxGit: saved", 2500);
+      let pulled: PullResult | null = null;
+      if (pullFirst) {
+        pulled = await git.pull();
+        if (pulled.outcome === "conflict") {
+          await this.handlePullConflict();
+          return;
+        }
+      }
+
+      const mustPush =
+        committed ||
+        this.pendingPush ||
+        pulled?.outcome === "merged" ||
+        pulled?.outcome === "rebased";
+
+      if (mustPush) {
+        await git.push();
+        this.pendingPush = false;
+        this.clearPushRetry();
+        this.showSyncStatus("✓ VeloxGit: saved", 2500);
+      } else {
+        this.showSyncStatus("");
+      }
+
       this.refreshChanges();
     } catch (error) {
       if (isNetworkError(error) || !isOnline()) {
         // Local commits stay safe; retry with backoff until the push lands.
-        this.pendingPush = true;
-        this.showSyncStatus("Offline (Commits queued)");
-        this.schedulePushRetry();
+        if (committed || this.pendingPush) {
+          this.pendingPush = true;
+          this.showSyncStatus("Offline (Commits queued)");
+          this.schedulePushRetry();
+        } else {
+          this.setOfflineStatus();
+        }
         console.warn("[VeloxGit] push postponed; remote unreachable");
       } else {
         console.warn("[VeloxGit] silent sync failed", error);
@@ -260,6 +293,32 @@ export default class VeloxGitPlugin extends Plugin {
     } finally {
       this.releaseGit();
     }
+  }
+
+  /**
+   * A background pull left unmerged files. Stop every automation path and
+   * bring the conflicts into view so the user can resolve them.
+   */
+  private async handlePullConflict(): Promise<void> {
+    console.warn("[VeloxGit] background pull conflict; disabling auto-sync");
+
+    // Stop retries first so nothing touches the conflicted index.
+    this.pendingPush = false;
+    this.clearPushRetry();
+
+    this.settings.enableAutoSave = false;
+    this.settings.syncOnSave = false;
+    await this.saveSettings();
+
+    this.showSyncStatus("VeloxGit: merge conflict", 15000);
+    new Notice(
+      "VeloxGit: background pull stopped with conflicts. Auto-sync disabled; resolve the conflicting files, then re-enable it.",
+      15000,
+    );
+
+    // Open the panel so conflict entries are visible and highlighted.
+    await this.activateView();
+    this.refreshChanges();
   }
 
   private setOfflineStatus(): void {

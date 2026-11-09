@@ -31,11 +31,13 @@ const TAG_COLORS: Record<FileChange["kind"], string> = {
   conflict: "var(--text-error)",
 };
 
-const POLL_INTERVAL_MS = 1_000;
+// 2 s halves the Git process spawn rate versus 1 s; actions that change
+// state still trigger an immediate refresh through the plugin.
+const POLL_INTERVAL_MS = 2_000;
 
 /**
  * Compact quick-action panel with a changed-files list underneath.
- * The list refreshes itself once per second while the panel is open.
+ * The list refreshes itself every two seconds while the panel is open.
  */
 export class VeloxGitView extends ItemView {
   private listEl: HTMLElement | null = null;
