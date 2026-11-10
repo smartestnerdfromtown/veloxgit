@@ -91,3 +91,27 @@
   border-color: #8b0000;
   color: #8b0000;
 }
+
+.velox-badge-modified {
+  background-color: rgba(255, 204, 128, 0.35);
+  border-color: #b78103;
+  color: #b78103;
+}
+
+.velox-badge-added {
+  background-color: rgba(165, 214, 167, 0.35);
+  border-color: #2e7d32;
+  color: #2e7d32;
+}
+
+.velox-badge-deleted {
+  background-color: rgba(179, 157, 219, 0.35);
+  border-color: #5e4b8b;
+  color: #5e4b8b;
+}
+
+.velox-badge-renamed {
+  background-color: rgba(129, 212, 250, 0.35);
+  border-color: #0277bd;
+  color: #0277bd;
+}
