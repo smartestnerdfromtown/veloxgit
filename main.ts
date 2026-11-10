@@ -1,7 +1,7 @@
-import { FileSystemAdapter, Notice, Plugin } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, TFile } from "obsidian";
 import { AutoSyncEngine } from "./src/auto-sync-engine";
 import type { BlameLine } from "./src/blame";
-import { createBlameExtension } from "./src/blame-extension";
+import { createBlameExtension, notifyBlameChanged } from "./src/blame-extension";
 import { formatBlame } from "./src/blame-format";
 import { BranchModal } from "./src/branch-modal";
 import { CommitModal } from "./src/commit-modal";
@@ -23,6 +23,15 @@ const LEAVE_SYNC_COOLDOWN_MS = 30_000;
 
 /** Hard cap for background pushes so a dead network cannot hang the sync. */
 const SILENT_PUSH_TIMEOUT_MS = 5_000;
+
+/** Bounded blame cache; the oldest file is evicted first. */
+const MAX_BLAME_CACHE_ENTRIES = 24;
+
+interface BlameCacheEntry {
+  /** File modification fingerprint (`mtime:size`). */
+  version: string;
+  blame: Map<number, BlameLine>;
+}
 
 /**
  * VeloxGit - ultra-fast, minimalist Git client for Obsidian.
@@ -49,12 +58,11 @@ export default class VeloxGitPlugin extends Plugin {
   private leaveSyncTimer: number | null = null;
   private leaveCheckInFlight = false;
   private lastLeaveSyncAt = 0;
-  private readonly blameCache = new Map<string, Map<number, BlameLine>>();
+  private readonly blameCache = new Map<string, BlameCacheEntry>();
   private readonly blameInFlight = new Map<
     string,
     Promise<Map<number, BlameLine> | null>
   >();
-  private readonly blameEpoch = new Map<string, number>();
   private readonly pushRetry = new PushRetryTimer(() => {
     if (this.pendingPush) void this.silentSync();
   });
@@ -131,15 +139,29 @@ export default class VeloxGitPlugin extends Plugin {
     this.registerEditorExtension(
       createBlameExtension({
         getBlame: (filePath) => this.getBlameForEditor(filePath),
-        invalidate: (filePath) => this.invalidateBlame(filePath),
         format: (entry) => formatBlame(entry),
       }),
     );
 
     // Feed the inactivity debouncer. registerEvent() unregisters on unload.
     this.registerEvent(
-      this.app.vault.on("modify", () => {
+      this.app.vault.on("modify", (file) => {
         this.autoSync?.notifyActivity();
+        if (file instanceof TFile && file.extension === "md") {
+          notifyBlameChanged();
+        }
+      }),
+    );
+
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        this.blameCache.delete(file.path);
+      }),
+    );
+
+    this.registerEvent(
+      this.app.vault.on("rename", (_file, oldPath) => {
+        this.blameCache.delete(oldPath);
       }),
     );
 
@@ -190,7 +212,6 @@ export default class VeloxGitPlugin extends Plugin {
 
     this.blameCache.clear();
     this.blameInFlight.clear();
-    this.blameEpoch.clear();
 
     console.debug("[VeloxGit] unloaded");
   }
@@ -201,30 +222,40 @@ export default class VeloxGitPlugin extends Plugin {
   }
 
   /**
-   * Cached blame lookup for the editor extension. Concurrent requests for the
-   * same file share one Git process; edits bump the epoch so stale results
-   * are never cached.
+   * Cached blame lookup for the editor extension. Entries are keyed by path
+   * and validated against the file's `mtime:size` fingerprint, so typing and
+   * cursor navigation reuse the cache and Git only runs after a disk write.
    */
   private async getBlameForEditor(
     filePath: string,
   ): Promise<Map<number, BlameLine> | null> {
-    const cached = this.blameCache.get(filePath);
-    if (cached) return cached;
+    const version = this.blameVersion(filePath);
+    if (version === null) return null;
 
-    const pending = this.blameInFlight.get(filePath);
+    const cached = this.blameCache.get(filePath);
+    if (cached?.version === version) {
+      // Refresh insertion order so the least recently used file evicts first.
+      this.blameCache.delete(filePath);
+      this.blameCache.set(filePath, cached);
+      return cached.blame;
+    }
+
+    const pendingKey = `${version}\u0000${filePath}`;
+    const pending = this.blameInFlight.get(pendingKey);
     if (pending) return pending;
 
     const git = this.git;
     if (!git || !this.environment?.isRepo) return null;
 
-    const epoch = this.blameEpoch.get(filePath) ?? 0;
-
     const request = git
       .getBlame(filePath)
       .then((blame) => {
-        // The document changed while blame was running; drop the result.
-        if ((this.blameEpoch.get(filePath) ?? 0) !== epoch) return null;
-        this.blameCache.set(filePath, blame);
+        // The file changed while blame was running; never cache a stale map.
+        if (this.blameVersion(filePath) !== version) return null;
+
+        this.blameCache.delete(filePath);
+        this.blameCache.set(filePath, { version, blame });
+        this.trimBlameCache();
         return blame;
       })
       .catch((error) => {
@@ -232,16 +263,26 @@ export default class VeloxGitPlugin extends Plugin {
         return null;
       })
       .finally(() => {
-        this.blameInFlight.delete(filePath);
+        this.blameInFlight.delete(pendingKey);
       });
 
-    this.blameInFlight.set(filePath, request);
+    this.blameInFlight.set(pendingKey, request);
     return request;
   }
 
-  private invalidateBlame(filePath: string): void {
-    this.blameCache.delete(filePath);
-    this.blameEpoch.set(filePath, (this.blameEpoch.get(filePath) ?? 0) + 1);
+  /** File fingerprint used to decide whether blame must run again. */
+  private blameVersion(filePath: string): string | null {
+    const file = this.app.vault.getFileByPath(filePath);
+    return file ? `${file.stat.mtime}:${file.stat.size}` : null;
+  }
+
+  /** Keeps the blame cache bounded by evicting the oldest entry. */
+  private trimBlameCache(): void {
+    while (this.blameCache.size > MAX_BLAME_CACHE_ENTRIES) {
+      const oldest = this.blameCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.blameCache.delete(oldest);
+    }
   }
 
   private async bootstrap(): Promise<void> {

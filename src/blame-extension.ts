@@ -18,8 +18,6 @@ import type { BlameLine } from "./blame";
 export interface BlameExtensionOptions {
   /** Returns the cached blame map for a vault-relative markdown path. */
   getBlame: (filePath: string) => Promise<Map<number, BlameLine> | null>;
-  /** Drops cached blame when the document text changes. */
-  invalidate: (filePath: string) => void;
   /** Formats one blame entry for the ghost text. */
   format: (entry: BlameLine) => string;
   /** Delay after the last cursor movement before querying blame. */
@@ -29,6 +27,19 @@ export interface BlameExtensionOptions {
 interface BlamePayload {
   line: number;
   text: string;
+}
+
+/** Blame rendering is deferred by a macrotask when Git responds slowly. */
+const SLOW_BLAME_MS = 50;
+
+const refreshListeners = new Set<() => void>();
+
+/**
+ * Tells every open editor that a file was saved or changed on disk. Views
+ * re-query blame; the cache decides whether a subprocess is actually needed.
+ */
+export function notifyBlameChanged(): void {
+  for (const listener of refreshListeners) listener();
 }
 
 const setBlame = StateEffect.define<BlamePayload | null>();
@@ -99,20 +110,21 @@ class BlameView {
   private timer: number | null = null;
   private requestId = 0;
   private painted: BlamePayload | null = null;
+  private readonly onExternalRefresh = (): void => {
+    this.schedule();
+  };
 
   constructor(
     private readonly view: EditorView,
     private readonly options: BlameExtensionOptions,
   ) {
+    refreshListeners.add(this.onExternalRefresh);
     this.schedule();
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged) {
-      const path = filePathFor(update.startState) ?? filePathFor(update.state);
-      if (path) this.options.invalidate(path);
-    }
-
+    // Typing never invalidates the cache; saved files refresh via
+    // `notifyBlameChanged()`, so normal writing stays subprocess-free.
     if (update.docChanged || update.selectionSet || update.focusChanged) {
       this.schedule();
     }
@@ -123,6 +135,7 @@ class BlameView {
       window.clearTimeout(this.timer);
       this.timer = null;
     }
+    refreshListeners.delete(this.onExternalRefresh);
     this.requestId++;
   }
 
@@ -145,6 +158,7 @@ class BlameView {
     }
 
     const lineAtStart = this.currentLine();
+    const started = performance.now();
     let entry: BlameLine | undefined;
 
     try {
@@ -160,6 +174,13 @@ class BlameView {
     if (this.currentLine() !== lineAtStart) {
       this.schedule();
       return;
+    }
+
+    // Slow blame runs yield one macrotask so rendering never competes with
+    // the subprocess result on the same frame.
+    if (performance.now() - started > SLOW_BLAME_MS) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      if (request !== this.requestId) return;
     }
 
     this.paint(
