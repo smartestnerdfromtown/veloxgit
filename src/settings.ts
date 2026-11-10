@@ -9,6 +9,8 @@ export interface VeloxGitSettings {
   syncOnStartup: boolean;
   /** Sync when the window loses focus or the document becomes hidden. */
   syncOnExitOrBlur: boolean;
+  /** Render inline Git blame ghost text in the editor. */
+  enableInlineBlame: boolean;
 }
 
 export const DEFAULT_SETTINGS: VeloxGitSettings = {
@@ -17,6 +19,7 @@ export const DEFAULT_SETTINGS: VeloxGitSettings = {
   syncOnSave: false,
   syncOnStartup: false,
   syncOnExitOrBlur: true,
+  enableInlineBlame: true,
 };
 
 /** Coerces persisted data into a valid settings object. */
@@ -41,5 +44,9 @@ export function normalizeSettings(data: unknown): VeloxGitSettings {
       stored.syncOnExitOrBlur === undefined
         ? DEFAULT_SETTINGS.syncOnExitOrBlur
         : Boolean(stored.syncOnExitOrBlur),
+    enableInlineBlame:
+      stored.enableInlineBlame === undefined
+        ? DEFAULT_SETTINGS.enableInlineBlame
+        : Boolean(stored.enableInlineBlame),
   };
 }

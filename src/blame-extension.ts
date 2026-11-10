@@ -32,14 +32,27 @@ interface BlamePayload {
 /** Blame rendering is deferred by a macrotask when Git responds slowly. */
 const SLOW_BLAME_MS = 50;
 
-const refreshListeners = new Set<() => void>();
+let blameEnabled = true;
+const activeViews = new Set<BlameView>();
+
+/**
+ * Enables or disables inline blame for every open editor. Disabling clears
+ * timers and decorations immediately so nothing keeps running in the
+ * background; enabling schedules a fresh lookup.
+ */
+export function setBlameEnabled(enabled: boolean): void {
+  if (blameEnabled === enabled) return;
+  blameEnabled = enabled;
+  for (const view of activeViews) view.setEnabled(enabled);
+}
 
 /**
  * Tells every open editor that a file was saved or changed on disk. Views
  * re-query blame; the cache decides whether a subprocess is actually needed.
  */
 export function notifyBlameChanged(): void {
-  for (const listener of refreshListeners) listener();
+  if (!blameEnabled) return;
+  for (const view of activeViews) view.refreshFromDisk();
 }
 
 const setBlame = StateEffect.define<BlamePayload | null>();
@@ -110,22 +123,47 @@ class BlameView {
   private timer: number | null = null;
   private requestId = 0;
   private painted: BlamePayload | null = null;
-  private readonly onExternalRefresh = (): void => {
-    this.schedule();
-  };
+  private enabled = blameEnabled;
 
   constructor(
     private readonly view: EditorView,
     private readonly options: BlameExtensionOptions,
   ) {
-    refreshListeners.add(this.onExternalRefresh);
-    this.schedule();
+    activeViews.add(this);
+    if (this.enabled) this.schedule();
+  }
+
+  /** Called by `setBlameEnabled` when the plugin setting changes. */
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+
+    if (enabled) {
+      this.schedule();
+      return;
+    }
+
+    if (this.timer !== null) {
+      window.clearTimeout(this.timer);
+      this.timer = null;
+    }
+    // Invalidate any in-flight request and hide the current annotation.
+    this.requestId++;
+    this.paint(null);
+  }
+
+  /** Called after a save or external disk change for this vault. */
+  refreshFromDisk(): void {
+    if (this.enabled) this.schedule();
   }
 
   update(update: ViewUpdate): void {
     // Typing never invalidates the cache; saved files refresh via
     // `notifyBlameChanged()`, so normal writing stays subprocess-free.
-    if (update.docChanged || update.selectionSet || update.focusChanged) {
+    if (
+      this.enabled &&
+      (update.docChanged || update.selectionSet || update.focusChanged)
+    ) {
       this.schedule();
     }
   }
@@ -135,11 +173,12 @@ class BlameView {
       window.clearTimeout(this.timer);
       this.timer = null;
     }
-    refreshListeners.delete(this.onExternalRefresh);
+    activeViews.delete(this);
     this.requestId++;
   }
 
   private schedule(): void {
+    if (!this.enabled) return;
     if (this.timer !== null) window.clearTimeout(this.timer);
 
     this.timer = window.setTimeout(() => {
@@ -149,6 +188,8 @@ class BlameView {
   }
 
   private async refresh(): Promise<void> {
+    if (!this.enabled) return;
+
     const request = ++this.requestId;
     const path = filePathFor(this.view.state);
 
@@ -168,8 +209,8 @@ class BlameView {
       console.debug("[VeloxGit] blame lookup failed", error);
     }
 
-    // A newer request, file switch, or cursor move wins.
-    if (request !== this.requestId) return;
+    // A newer request, disable, file switch, or cursor move wins.
+    if (request !== this.requestId || !this.enabled) return;
     if (filePathFor(this.view.state) !== path) return;
     if (this.currentLine() !== lineAtStart) {
       this.schedule();
@@ -180,7 +221,7 @@ class BlameView {
     // the subprocess result on the same frame.
     if (performance.now() - started > SLOW_BLAME_MS) {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      if (request !== this.requestId) return;
+      if (request !== this.requestId || !this.enabled) return;
     }
 
     this.paint(

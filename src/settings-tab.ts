@@ -2,8 +2,8 @@ import { App, PluginSettingTab, Setting } from "obsidian";
 import type VeloxGitPlugin from "../main";
 
 /**
- * Settings UI for background automation. Values are persisted immediately;
- * the timer engine is re-configured after every save.
+ * Settings UI for background automation and inline blame. Values are
+ * persisted immediately; live subsystems are re-configured after every save.
  */
 export class VeloxGitSettingTab extends PluginSettingTab {
   constructor(
@@ -82,6 +82,18 @@ export class VeloxGitSettingTab extends PluginSettingTab {
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.syncOnExitOrBlur).onChange(async (value) => {
           this.plugin.settings.syncOnExitOrBlur = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl).setName("Inline blame").setHeading();
+
+    new Setting(containerEl)
+      .setName("Enable inline blame")
+      .setDesc("Show author, relative time, and commit message at the end of the active line.")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.enableInlineBlame).onChange(async (value) => {
+          this.plugin.settings.enableInlineBlame = value;
           await this.plugin.saveSettings();
         });
       });

@@ -1,7 +1,11 @@
 import { FileSystemAdapter, Notice, Plugin, TFile } from "obsidian";
 import { AutoSyncEngine } from "./src/auto-sync-engine";
 import type { BlameLine } from "./src/blame";
-import { createBlameExtension, notifyBlameChanged } from "./src/blame-extension";
+import {
+  createBlameExtension,
+  notifyBlameChanged,
+  setBlameEnabled,
+} from "./src/blame-extension";
 import { formatBlame } from "./src/blame-format";
 import { BranchModal } from "./src/branch-modal";
 import { CommitModal } from "./src/commit-modal";
@@ -210,6 +214,8 @@ export default class VeloxGitPlugin extends Plugin {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_VELOXGIT);
     this.view = null;
 
+    // Drop editor timers and decorations before the plugin goes away.
+    setBlameEnabled(false);
     this.blameCache.clear();
     this.blameInFlight.clear();
 
@@ -310,10 +316,12 @@ export default class VeloxGitPlugin extends Plugin {
 
   private async loadSettings(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
+    setBlameEnabled(this.settings.enableInlineBlame);
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+    setBlameEnabled(this.settings.enableInlineBlame);
 
     // Disabling the feature must also drop a debounced leave sync.
     if (!this.settings.syncOnExitOrBlur && this.leaveSyncTimer !== null) {
