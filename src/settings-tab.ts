@@ -97,5 +97,89 @@ export class VeloxGitSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    this.addColorSetting(
+      containerEl,
+      "Blame text color",
+      "Leave the default to follow the current theme.",
+      "blameTextColor",
+      "var(--text-muted)",
+    );
+
+    this.addColorSetting(
+      containerEl,
+      "Active line highlight",
+      "Background color of the line that owns the blame. Leave the default to follow the theme.",
+      "blameHighlightColor",
+      "var(--background-secondary-alt)",
+    );
+
+    const currentSize = this.plugin.settings.blameFontSize;
+    const sizes = BLAME_TEXT_SIZES.includes(currentSize)
+      ? BLAME_TEXT_SIZES
+      : [...BLAME_TEXT_SIZES, currentSize].sort((a, b) => a - b);
+
+    new Setting(containerEl)
+      .setName("Blame text size")
+      .setDesc("Ghost text size in pixels.")
+      .addDropdown((dropdown) => {
+        for (const size of sizes) dropdown.addOption(String(size), `${size} px`);
+        dropdown.setValue(String(currentSize)).onChange(async (value) => {
+          this.plugin.settings.blameFontSize = Number(value);
+          await this.plugin.saveSettings();
+        });
+      });
   }
+
+  /** Color picker plus a reset button that restores the theme color. */
+  private addColorSetting(
+    containerEl: HTMLElement,
+    name: string,
+    desc: string,
+    key: "blameTextColor" | "blameHighlightColor",
+    token: string,
+  ): void {
+    const current = this.plugin.settings[key] || resolveThemeColor(token);
+
+    new Setting(containerEl)
+      .setName(name)
+      .setDesc(desc)
+      .addColorPicker((picker) => {
+        picker.setValue(current).onChange(async (value) => {
+          this.plugin.settings[key] = value;
+          await this.plugin.saveSettings();
+        });
+      })
+      .addExtraButton((button) => {
+        button
+          .setIcon("rotate-ccw")
+          .setTooltip("Use theme color")
+          .onClick(async () => {
+            this.plugin.settings[key] = "";
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+  }
+}
+
+/** Sizes offered in the blame text dropdown. */
+const BLAME_TEXT_SIZES = [10, 11, 12, 13, 14, 16];
+
+/** Resolves a theme token to a hex color for the picker's initial value. */
+function resolveThemeColor(token: string): string {
+  const probe = document.createElement("div");
+  probe.style.color = token;
+  probe.style.display = "none";
+  document.body.appendChild(probe);
+  const computed = window.getComputedStyle(probe).color;
+  probe.remove();
+
+  const channels = computed.match(/\d+(\.\d+)?/g);
+  if (!channels || channels.length < 3) return "#888888";
+
+  return `#${channels
+    .slice(0, 3)
+    .map((value) => Math.round(Number(value)).toString(16).padStart(2, "0"))
+    .join("")}`;
 }

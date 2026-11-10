@@ -234,6 +234,7 @@ export default class VeloxGitPlugin extends Plugin {
     // Drop editor timers and decorations before the plugin goes away.
     this.disposed = true;
     disposeBlameExtension();
+    this.clearBlameAppearance();
     this.blameCache.clear();
     this.blameInFlight.clear();
 
@@ -347,11 +348,13 @@ export default class VeloxGitPlugin extends Plugin {
   private async loadSettings(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
     setBlameEnabled(this.settings.enableInlineBlame);
+    this.applyBlameAppearance();
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
     setBlameEnabled(this.settings.enableInlineBlame);
+    this.applyBlameAppearance();
 
     // Disabling the feature must also drop a debounced leave sync.
     if (!this.settings.syncOnExitOrBlur && this.leaveSyncTimer !== null) {
@@ -360,6 +363,37 @@ export default class VeloxGitPlugin extends Plugin {
     }
 
     this.autoSync?.updateSettings(this.settings);
+  }
+
+  /**
+   * Publishes the user's blame colors and size as CSS variables. Empty colors
+   * fall back to theme tokens, so defaults still adapt to every theme.
+   */
+  private applyBlameAppearance(): void {
+    const style = document.body.style;
+    style.setProperty(
+      "--veloxgit-blame-color",
+      this.settings.blameTextColor.trim() || "var(--text-muted)",
+    );
+    style.setProperty(
+      "--veloxgit-blame-highlight",
+      this.settings.blameHighlightColor.trim() ||
+        "var(--background-secondary-alt)",
+    );
+    style.setProperty("--veloxgit-blame-size", `${this.settings.blameFontSize}px`);
+    // A custom color is shown at full strength; the default stays ghosted.
+    style.setProperty(
+      "--veloxgit-blame-opacity",
+      this.settings.blameTextColor.trim() ? "1" : "0.6",
+    );
+  }
+
+  private clearBlameAppearance(): void {
+    const style = document.body.style;
+    style.removeProperty("--veloxgit-blame-color");
+    style.removeProperty("--veloxgit-blame-highlight");
+    style.removeProperty("--veloxgit-blame-size");
+    style.removeProperty("--veloxgit-blame-opacity");
   }
 
   private handleAutoSaveTick(): void {

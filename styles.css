@@ -2,7 +2,10 @@
 .cm-editor .cm-line.veloxgit-active-line {
   position: relative;
   border-radius: var(--radius-s);
-  background-color: var(--background-secondary-alt);
+  background-color: var(
+    --veloxgit-blame-highlight,
+    var(--background-secondary-alt)
+  );
 }
 
 /* Ghost text pinned to the right edge of the active line. */
@@ -17,16 +20,16 @@
   max-width: 45%;
   overflow: hidden;
   padding: 0 0.35em;
-  color: var(--text-muted);
+  color: var(--veloxgit-blame-color, var(--text-muted));
   font-family: var(--font-monospace);
-  /* Fixed px keeps headings and body text equally small. */
-  font-size: var(--font-ui-smaller, 12px);
+  /* Fixed size keeps headings and body text equally small. */
+  font-size: var(--veloxgit-blame-size, var(--font-ui-smaller, 12px));
   font-style: normal;
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.2;
   white-space: nowrap;
-  opacity: 0.6;
+  opacity: var(--veloxgit-blame-opacity, 0.6);
   pointer-events: none;
   user-select: none;
   transition: opacity 0.15s ease-in-out;
@@ -43,7 +46,7 @@
     opacity: 0;
   }
   to {
-    opacity: 0.6;
+    opacity: var(--veloxgit-blame-opacity, 0.6);
   }
 }
 

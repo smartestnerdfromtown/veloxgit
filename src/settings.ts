@@ -11,6 +11,12 @@ export interface VeloxGitSettings {
   syncOnExitOrBlur: boolean;
   /** Render inline Git blame ghost text in the editor. */
   enableInlineBlame: boolean;
+  /** Blame text color (CSS color); empty follows the theme. */
+  blameTextColor: string;
+  /** Active-line highlight color (CSS color); empty follows the theme. */
+  blameHighlightColor: string;
+  /** Blame ghost text size in pixels. */
+  blameFontSize: number;
 }
 
 export const DEFAULT_SETTINGS: VeloxGitSettings = {
@@ -20,6 +26,9 @@ export const DEFAULT_SETTINGS: VeloxGitSettings = {
   syncOnStartup: false,
   syncOnExitOrBlur: true,
   enableInlineBlame: true,
+  blameTextColor: "",
+  blameHighlightColor: "",
+  blameFontSize: 12,
 };
 
 /** Coerces persisted data into a valid settings object. */
@@ -32,6 +41,15 @@ export function normalizeSettings(data: unknown): VeloxGitSettings {
     rawInterval === null || rawInterval === undefined || rawInterval === ""
       ? DEFAULT_SETTINGS.autoSaveInterval
       : Number(rawInterval);
+
+  const rawSize = stored.blameFontSize;
+  const parsedSize =
+    rawSize === null || rawSize === undefined || rawSize === ""
+      ? DEFAULT_SETTINGS.blameFontSize
+      : Number(rawSize);
+  const size = Number.isFinite(parsedSize)
+    ? Math.min(24, Math.max(8, Math.round(parsedSize)))
+    : DEFAULT_SETTINGS.blameFontSize;
 
   return {
     enableAutoSave: Boolean(stored.enableAutoSave),
@@ -48,5 +66,13 @@ export function normalizeSettings(data: unknown): VeloxGitSettings {
       stored.enableInlineBlame === undefined
         ? DEFAULT_SETTINGS.enableInlineBlame
         : Boolean(stored.enableInlineBlame),
+    blameTextColor: colorOrEmpty(stored.blameTextColor),
+    blameHighlightColor: colorOrEmpty(stored.blameHighlightColor),
+    blameFontSize: size,
   };
+}
+
+/** Keeps only non-empty string colors; anything else means "theme default". */
+function colorOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
