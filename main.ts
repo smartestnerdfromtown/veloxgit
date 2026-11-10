@@ -3,6 +3,7 @@ import { AutoSyncEngine } from "./src/auto-sync-engine";
 import type { BlameLine } from "./src/blame";
 import {
   createBlameExtension,
+  disposeBlameExtension,
   notifyBlameChanged,
   setBlameEnabled,
 } from "./src/blame-extension";
@@ -38,6 +39,12 @@ interface BlameCacheEntry {
 }
 
 /**
+ * Shared result for files Git cannot blame (untracked, unborn branch, or
+ * read errors). Caching it prevents repeated failing subprocesses.
+ */
+const EMPTY_BLAME = new Map<number, BlameLine>();
+
+/**
  * VeloxGit - ultra-fast, minimalist Git client for Obsidian.
  *
  * Changed-files list in the sidebar; all Git work stays async.
@@ -59,6 +66,7 @@ export default class VeloxGitPlugin extends Plugin {
   private isGitBusy = false;
   private isSyncing = false;
   private pendingPush = false;
+  private disposed = false;
   private leaveSyncTimer: number | null = null;
   private leaveCheckInFlight = false;
   private lastLeaveSyncAt = 0;
@@ -215,9 +223,13 @@ export default class VeloxGitPlugin extends Plugin {
     this.view = null;
 
     // Drop editor timers and decorations before the plugin goes away.
-    setBlameEnabled(false);
+    this.disposed = true;
+    disposeBlameExtension();
     this.blameCache.clear();
     this.blameInFlight.clear();
+
+    this.git = null;
+    this.environment = null;
 
     console.debug("[VeloxGit] unloaded");
   }
@@ -235,6 +247,8 @@ export default class VeloxGitPlugin extends Plugin {
   private async getBlameForEditor(
     filePath: string,
   ): Promise<Map<number, BlameLine> | null> {
+    if (this.disposed) return null;
+
     const version = this.blameVersion(filePath);
     if (version === null) return null;
 
@@ -256,6 +270,7 @@ export default class VeloxGitPlugin extends Plugin {
     const request = git
       .getBlame(filePath)
       .then((blame) => {
+        if (this.disposed) return null;
         // The file changed while blame was running; never cache a stale map.
         if (this.blameVersion(filePath) !== version) return null;
 
@@ -264,9 +279,15 @@ export default class VeloxGitPlugin extends Plugin {
         this.trimBlameCache();
         return blame;
       })
-      .catch((error) => {
-        console.debug("[VeloxGit] blame failed", error);
-        return null;
+      .catch(() => {
+        // Untracked files and repos without history have no blame. Cache the
+        // empty result so cursor movement never retries Git or logs errors.
+        if (!this.disposed && this.blameVersion(filePath) === version) {
+          this.blameCache.delete(filePath);
+          this.blameCache.set(filePath, { version, blame: EMPTY_BLAME });
+          this.trimBlameCache();
+        }
+        return EMPTY_BLAME;
       })
       .finally(() => {
         this.blameInFlight.delete(pendingKey);

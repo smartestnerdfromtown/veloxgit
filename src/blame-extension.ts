@@ -55,6 +55,16 @@ export function notifyBlameChanged(): void {
   for (const view of activeViews) view.refreshFromDisk();
 }
 
+/**
+ * Releases every editor timer, pending lookup, and widget before the plugin
+ * unloads. Editor views also remove themselves from the registry on destroy.
+ */
+export function disposeBlameExtension(): void {
+  blameEnabled = false;
+  for (const view of activeViews) view.setEnabled(false);
+  activeViews.clear();
+}
+
 const setBlame = StateEffect.define<BlamePayload | null>();
 
 /** Muted end-of-line label for the active line. */
@@ -158,11 +168,15 @@ class BlameView {
   }
 
   update(update: ViewUpdate): void {
-    // Typing never invalidates the cache; saved files refresh via
-    // `notifyBlameChanged()`, so normal writing stays subprocess-free.
+    // Blame only follows the cursor or the attached file. Pure typing does
+    // not repaint: the cached annotation stays mapped by CodeMirror, and
+    // saves refresh every view through `notifyBlameChanged()`.
+    const fileChanged =
+      filePathFor(update.startState) !== filePathFor(update.state);
+
     if (
       this.enabled &&
-      (update.docChanged || update.selectionSet || update.focusChanged)
+      (fileChanged || update.selectionSet || update.focusChanged)
     ) {
       this.schedule();
     }
@@ -205,8 +219,10 @@ class BlameView {
     try {
       const blame = await this.options.getBlame(path);
       entry = blame?.get(lineAtStart);
-    } catch (error) {
-      console.debug("[VeloxGit] blame lookup failed", error);
+    } catch {
+      // Untracked files and repos without history have no blame; the
+      // annotation is simply omitted.
+      entry = undefined;
     }
 
     // A newer request, disable, file switch, or cursor move wins.
