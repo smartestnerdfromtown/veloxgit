@@ -144,6 +144,7 @@
 
 button.velox-btn {
   --velox-btn-accent: var(--text-muted);
+  --velox-btn-fill: var(--background-primary-alt);
 
   display: inline-flex;
   align-items: center;
@@ -152,7 +153,7 @@ button.velox-btn {
   padding: 6px 12px;
   border: 1.5px solid currentColor;
   border-radius: 8px;
-  background: var(--background-primary-alt);
+  background-color: var(--velox-btn-fill);
   color: var(--velox-btn-accent);
   font-family: inherit;
   font-size: 0.82em;
@@ -165,7 +166,7 @@ button.velox-btn {
 /* Keep Obsidian's default button chrome from overriding the accent. */
 button.velox-btn:hover,
 button.velox-btn:focus-visible {
-  background: var(--background-primary-alt);
+  background-color: var(--velox-btn-fill);
   border-color: currentColor;
   color: var(--velox-btn-accent);
   box-shadow: none;
@@ -178,18 +179,45 @@ button.velox-btn svg {
   fill: none;
 }
 
-.velox-btn-stage {
-  --velox-btn-accent: var(--color-green);
+/* Variant selectors add the base class so they outrank
+   `button.velox-btn` variable declarations. */
+button.velox-btn.velox-btn-stage {
+  --velox-btn-accent: #58a6ff;
+  --velox-btn-fill: rgba(88, 166, 255, 0.08);
 }
 
-.velox-btn-commit {
-  --velox-btn-accent: var(--color-blue);
+button.velox-btn.velox-btn-commit {
+  --velox-btn-accent: #bc8cff;
+  --velox-btn-fill: rgba(188, 140, 255, 0.08);
 }
 
-.velox-btn-push {
-  --velox-btn-accent: var(--color-purple);
+button.velox-btn.velox-btn-push {
+  --velox-btn-accent: #f29d38;
+  --velox-btn-fill: rgba(242, 157, 56, 0.08);
 }
 
-.velox-btn-pull {
-  --velox-btn-accent: var(--color-orange);
+button.velox-btn.velox-btn-pull {
+  --velox-btn-accent: #3fb950;
+  --velox-btn-fill: rgba(63, 185, 80, 0.08);
+}
+
+/* Light theme: deepen the inks so the palette keeps its contrast on white. */
+.theme-light button.velox-btn.velox-btn-stage {
+  --velox-btn-accent: #0969da;
+  --velox-btn-fill: rgba(9, 105, 218, 0.08);
+}
+
+.theme-light button.velox-btn.velox-btn-commit {
+  --velox-btn-accent: #8250df;
+  --velox-btn-fill: rgba(130, 80, 223, 0.08);
+}
+
+.theme-light button.velox-btn.velox-btn-push {
+  --velox-btn-accent: #bc4c00;
+  --velox-btn-fill: rgba(188, 76, 0, 0.08);
+}
+
+.theme-light button.velox-btn.velox-btn-pull {
+  --velox-btn-accent: #1a7f37;
+  --velox-btn-fill: rgba(26, 127, 55, 0.08);
 }
