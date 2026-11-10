@@ -22,15 +22,6 @@ const TAGS: Record<FileChange["kind"], string> = {
   conflict: "!",
 };
 
-const TAG_COLORS: Record<FileChange["kind"], string> = {
-  modified: "var(--text-warning)",
-  added: "var(--text-success)",
-  deleted: "var(--text-error)",
-  renamed: "var(--text-accent)",
-  untracked: "var(--text-muted)",
-  conflict: "var(--text-error)",
-};
-
 // 2 s halves the Git process spawn rate versus 1 s; actions that change
 // state still trigger an immediate refresh through the plugin.
 const POLL_INTERVAL_MS = 2_000;
@@ -262,13 +253,10 @@ export class VeloxGitView extends ItemView {
         row.style.background = "";
       });
 
-      const tag = document.createElement("span");
-      tag.setText(TAGS[change.kind]);
-      tag.style.minWidth = "20px";
-      tag.style.textAlign = "center";
-      tag.style.fontFamily = "var(--font-monospace)";
-      tag.style.fontWeight = "600";
-      tag.style.color = TAG_COLORS[change.kind];
+      // Status indicators render as themed badges; styling lives in styles.css.
+      const badge = document.createElement("span");
+      badge.className = `velox-badge velox-badge-${change.kind}`;
+      badge.setText(TAGS[change.kind]);
 
       const path = document.createElement("span");
       path.setText(change.path);
@@ -276,7 +264,7 @@ export class VeloxGitView extends ItemView {
       path.style.textOverflow = "ellipsis";
       path.style.whiteSpace = "nowrap";
 
-      row.appendChild(tag);
+      row.appendChild(badge);
       row.appendChild(path);
       fragment.appendChild(row);
     }

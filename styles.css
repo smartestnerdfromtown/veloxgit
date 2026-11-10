@@ -63,3 +63,31 @@
     transition: none;
   }
 }
+
+/* --- Sidebar file-status badges ------------------------------------------ */
+
+.velox-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-style: solid;
+  border-width: 1.5px;
+  border-color: currentColor;
+  border-radius: 6px;
+  font-family: var(--font-monospace);
+  font-size: 0.75em;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+.velox-badge-untracked {
+  background-color: rgba(255, 128, 128, 0.35);
+  border-color: #8b0000;
+  color: #8b0000;
+}
