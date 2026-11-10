@@ -1,5 +1,8 @@
 import { FileSystemAdapter, Notice, Plugin } from "obsidian";
 import { AutoSyncEngine } from "./src/auto-sync-engine";
+import type { BlameLine } from "./src/blame";
+import { createBlameExtension } from "./src/blame-extension";
+import { formatBlame } from "./src/blame-format";
 import { BranchModal } from "./src/branch-modal";
 import { CommitModal } from "./src/commit-modal";
 import { CredentialsModal, type GitIdentity } from "./src/credentials-modal";
@@ -46,6 +49,12 @@ export default class VeloxGitPlugin extends Plugin {
   private leaveSyncTimer: number | null = null;
   private leaveCheckInFlight = false;
   private lastLeaveSyncAt = 0;
+  private readonly blameCache = new Map<string, Map<number, BlameLine>>();
+  private readonly blameInFlight = new Map<
+    string,
+    Promise<Map<number, BlameLine> | null>
+  >();
+  private readonly blameEpoch = new Map<string, number>();
   private readonly pushRetry = new PushRetryTimer(() => {
     if (this.pendingPush) void this.silentSync();
   });
@@ -119,6 +128,14 @@ export default class VeloxGitPlugin extends Plugin {
       void this.activateView();
     });
 
+    this.registerEditorExtension(
+      createBlameExtension({
+        getBlame: (filePath) => this.getBlameForEditor(filePath),
+        invalidate: (filePath) => this.invalidateBlame(filePath),
+        format: (entry) => formatBlame(entry),
+      }),
+    );
+
     // Feed the inactivity debouncer. registerEvent() unregisters on unload.
     this.registerEvent(
       this.app.vault.on("modify", () => {
@@ -171,12 +188,60 @@ export default class VeloxGitPlugin extends Plugin {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_VELOXGIT);
     this.view = null;
 
+    this.blameCache.clear();
+    this.blameInFlight.clear();
+    this.blameEpoch.clear();
+
     console.debug("[VeloxGit] unloaded");
   }
 
   private getVaultPath(): string | null {
     const adapter = this.app.vault.adapter;
     return adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
+  }
+
+  /**
+   * Cached blame lookup for the editor extension. Concurrent requests for the
+   * same file share one Git process; edits bump the epoch so stale results
+   * are never cached.
+   */
+  private async getBlameForEditor(
+    filePath: string,
+  ): Promise<Map<number, BlameLine> | null> {
+    const cached = this.blameCache.get(filePath);
+    if (cached) return cached;
+
+    const pending = this.blameInFlight.get(filePath);
+    if (pending) return pending;
+
+    const git = this.git;
+    if (!git || !this.environment?.isRepo) return null;
+
+    const epoch = this.blameEpoch.get(filePath) ?? 0;
+
+    const request = git
+      .getBlame(filePath)
+      .then((blame) => {
+        // The document changed while blame was running; drop the result.
+        if ((this.blameEpoch.get(filePath) ?? 0) !== epoch) return null;
+        this.blameCache.set(filePath, blame);
+        return blame;
+      })
+      .catch((error) => {
+        console.debug("[VeloxGit] blame failed", error);
+        return null;
+      })
+      .finally(() => {
+        this.blameInFlight.delete(filePath);
+      });
+
+    this.blameInFlight.set(filePath, request);
+    return request;
+  }
+
+  private invalidateBlame(filePath: string): void {
+    this.blameCache.delete(filePath);
+    this.blameEpoch.set(filePath, (this.blameEpoch.get(filePath) ?? 0) + 1);
   }
 
   private async bootstrap(): Promise<void> {

@@ -1,0 +1,16 @@
+/* Inline blame ghost text shown at the end of the active editor line. */
+.veloxgit-blame {
+  display: inline-block;
+  max-width: 45%;
+  margin-left: 2em;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 0.85em;
+  font-style: italic;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+  opacity: 0.9;
+  pointer-events: none;
+  user-select: none;
+}
