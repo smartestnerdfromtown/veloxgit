@@ -1,4 +1,5 @@
 import { FileSystemAdapter, Notice, Plugin, TFile } from "obsidian";
+import styles from "./styles.css";
 import { AutoSyncEngine } from "./src/auto-sync-engine";
 import type { BlameLine } from "./src/blame";
 import {
@@ -80,6 +81,14 @@ export default class VeloxGitPlugin extends Plugin {
   });
 
   onload(): void {
+    // The bundle embeds styles.css so styling survives plugin folders that do
+    // not ship or refresh the separate stylesheet.
+    const styleEl = document.createElement("style");
+    styleEl.id = "veloxgit-styles";
+    styleEl.textContent = styles;
+    document.head.appendChild(styleEl);
+    this.register(() => styleEl.remove());
+
     // Status bar text doubles as a lightweight environment indicator.
     this.statusBarEl = this.addStatusBarItem();
     this.setStatus("VeloxGit");

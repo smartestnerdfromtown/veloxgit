@@ -26,11 +26,15 @@ export interface BlameExtensionOptions {
 
 interface BlamePayload {
   line: number;
-  text: string;
+  /** Formatted ghost text, or null when the line has no attribution. */
+  text: string | null;
 }
 
 /** Blame rendering is deferred by a macrotask when Git responds slowly. */
 const SLOW_BLAME_MS = 50;
+
+/** Wait for the cursor to rest before painting, avoiding typing flicker. */
+const CURSOR_REST_MS = 180;
 
 let blameEnabled = true;
 const activeViews = new Set<BlameView>();
@@ -80,8 +84,13 @@ class BlameWidget extends WidgetType {
   toDOM(): HTMLElement {
     const el = document.createElement("span");
     el.className = "veloxgit-blame";
-    el.textContent = this.text;
     el.setAttribute("aria-hidden", "true");
+
+    const text = document.createElement("span");
+    text.className = "veloxgit-blame-text";
+    text.textContent = this.text;
+    el.appendChild(text);
+
     return el;
   }
 
@@ -90,7 +99,7 @@ class BlameWidget extends WidgetType {
   }
 }
 
-/** Holds the single widget decoration; replaced through `setBlame`. */
+/** Holds the active-line highlight and at most one blame widget. */
 const blameField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(decorations, tr) {
@@ -109,12 +118,22 @@ const blameField = StateField.define<DecorationSet>({
         tr.state.doc.lines,
       );
       const line = tr.state.doc.line(lineNumber);
-      next = Decoration.set([
-        Decoration.widget({
-          widget: new BlameWidget(effect.value.text),
-          side: 1,
-        }).range(line.to),
-      ]);
+      const marks = [
+        Decoration.line({ attributes: { class: "veloxgit-active-line" } }).range(
+          line.from,
+        ),
+      ];
+
+      if (effect.value.text !== null) {
+        marks.push(
+          Decoration.widget({
+            widget: new BlameWidget(effect.value.text),
+            side: 1,
+          }).range(line.to),
+        );
+      }
+
+      next = Decoration.set(marks, true);
     }
 
     return next;
@@ -134,12 +153,27 @@ class BlameView {
   private requestId = 0;
   private painted: BlamePayload | null = null;
   private enabled = blameEnabled;
+  private visibilityFrame: number | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private contentWidth = 0;
 
   constructor(
     private readonly view: EditorView,
     private readonly options: BlameExtensionOptions,
   ) {
     activeViews.add(this);
+
+    // A panel or sidebar resize changes how much room the label has.
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver((entries) => {
+        const width = entries[0]?.contentRect.width ?? 0;
+        if (width === this.contentWidth) return;
+        this.contentWidth = width;
+        if (this.enabled && this.painted?.text) this.scheduleVisibility();
+      });
+      this.resizeObserver.observe(view.contentDOM);
+    }
+
     if (this.enabled) this.schedule();
   }
 
@@ -157,6 +191,7 @@ class BlameView {
       window.clearTimeout(this.timer);
       this.timer = null;
     }
+    this.cancelVisibility();
     // Invalidate any in-flight request and hide the current annotation.
     this.requestId++;
     this.paint(null);
@@ -179,6 +214,12 @@ class BlameView {
       (fileChanged || update.selectionSet || update.focusChanged)
     ) {
       this.schedule();
+      return;
+    }
+
+    // Scrolled-in lines need a fresh overflow measurement.
+    if (this.enabled && this.painted?.text && update.viewportChanged) {
+      this.scheduleVisibility();
     }
   }
 
@@ -187,6 +228,9 @@ class BlameView {
       window.clearTimeout(this.timer);
       this.timer = null;
     }
+    this.cancelVisibility();
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     activeViews.delete(this);
     this.requestId++;
   }
@@ -198,7 +242,7 @@ class BlameView {
     this.timer = window.setTimeout(() => {
       this.timer = null;
       void this.refresh();
-    }, this.options.debounceMs ?? 150);
+    }, this.options.debounceMs ?? CURSOR_REST_MS);
   }
 
   private async refresh(): Promise<void> {
@@ -240,9 +284,11 @@ class BlameView {
       if (request !== this.requestId || !this.enabled) return;
     }
 
-    this.paint(
-      entry ? { line: lineAtStart, text: this.options.format(entry) } : null,
-    );
+    // Keep the active-line highlight even when the file has no blame yet.
+    this.paint({
+      line: lineAtStart,
+      text: entry ? this.options.format(entry) : null,
+    });
   }
 
   private currentLine(): number {
@@ -263,6 +309,71 @@ class BlameView {
 
     this.painted = value;
     this.view.dispatch({ effects: setBlame.of(value) });
+
+    if (value?.text) this.scheduleVisibility();
+    else this.cancelVisibility();
+  }
+
+  private cancelVisibility(): void {
+    if (this.visibilityFrame === null) return;
+    window.cancelAnimationFrame(this.visibilityFrame);
+    this.visibilityFrame = null;
+  }
+
+  private scheduleVisibility(): void {
+    if (this.visibilityFrame !== null) return;
+    this.visibilityFrame = window.requestAnimationFrame(() => {
+      this.visibilityFrame = null;
+      this.syncVisibility();
+    });
+  }
+
+  /**
+   * Hides the ghost text when the note's own text reaches the label or the
+   * line wraps, so dense paragraphs stay unobstructed. Runs once per paint
+   * frame on the active line only; never while typing.
+   */
+  private syncVisibility(): void {
+    if (!this.enabled || !this.painted?.text) return;
+
+    const lineEl = this.view.contentDOM.querySelector<HTMLElement>(
+      ".cm-line.veloxgit-active-line",
+    );
+    const blameEl = lineEl?.querySelector<HTMLElement>(".veloxgit-blame");
+    if (!lineEl || !blameEl) return;
+
+    const lineRect = lineEl.getBoundingClientRect();
+    if (lineRect.width === 0) return;
+
+    // Measure the label at full size; only its display state changes.
+    blameEl.classList.remove("veloxgit-blame-hidden");
+    const labelLeft = blameEl.getBoundingClientRect().left - lineRect.left;
+    const limit = labelLeft - 8;
+
+    let textRight = 0;
+    let firstTop = Number.NaN;
+    let wrapped = false;
+    const range = document.createRange();
+    const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (blameEl.contains(node)) continue;
+
+      range.selectNodeContents(node);
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width === 0 || rect.height === 0) continue;
+        if (Number.isNaN(firstTop)) firstTop = rect.top;
+        else if (Math.abs(rect.top - firstTop) > 2) wrapped = true;
+        if (rect.right - lineRect.left > textRight) {
+          textRight = rect.right - lineRect.left;
+        }
+      }
+    }
+
+    blameEl.classList.toggle(
+      "veloxgit-blame-hidden",
+      wrapped || textRight > limit,
+    );
   }
 }
 

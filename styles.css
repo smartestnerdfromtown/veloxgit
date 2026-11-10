@@ -1,18 +1,62 @@
-/* Inline blame ghost text shown at the end of the active editor line. */
-.veloxgit-blame {
-  display: inline-block;
+/* Soft highlight for the line that owns the blame annotation. */
+.cm-editor .cm-line.veloxgit-active-line {
+  position: relative;
+  border-radius: var(--radius-s);
+  background-color: var(--background-secondary-alt);
+}
+
+/* Ghost text pinned to the right edge of the active line. */
+.cm-editor .cm-line .veloxgit-blame {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   max-width: 45%;
-  margin-left: 2em;
   overflow: hidden;
+  padding: 0 0.35em;
   color: var(--text-muted);
-  font-size: 0.8em;
-  font-style: italic;
+  font-family: var(--font-monospace);
+  /* Fixed px keeps headings and body text equally small. */
+  font-size: var(--font-ui-smaller, 12px);
+  font-style: normal;
   font-weight: 400;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
+  line-height: 1.2;
   white-space: nowrap;
-  text-overflow: ellipsis;
-  vertical-align: baseline;
-  opacity: 0.78;
+  opacity: 0.6;
   pointer-events: none;
   user-select: none;
+  transition: opacity 0.15s ease-in-out;
+  animation: veloxgit-blame-fade-in 0.15s ease-in-out;
+}
+
+/* Hidden when the note text runs into the label or wraps to a new row. */
+.cm-editor .cm-line .veloxgit-blame.veloxgit-blame-hidden {
+  display: none;
+}
+
+@keyframes veloxgit-blame-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.6;
+  }
+}
+
+.cm-editor .cm-line .veloxgit-blame .veloxgit-blame-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-editor .cm-line .veloxgit-blame {
+    animation: none;
+    transition: none;
+  }
 }
