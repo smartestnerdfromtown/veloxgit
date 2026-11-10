@@ -80,10 +80,10 @@ export class VeloxGitView extends ItemView {
     grid.style.gridTemplateColumns = "1fr 1fr";
     grid.style.gap = "8px";
 
-    this.addQuickAction(grid, "Stage all", "plus-circle", this.actions.stageAll);
-    this.addQuickAction(grid, "Commit", "git-commit", this.actions.commit);
-    this.addQuickAction(grid, "Push", "upload", this.actions.push);
-    this.addQuickAction(grid, "Pull", "download", this.actions.pull);
+    this.addQuickAction(grid, "Stage all", "plus-circle", "stage", this.actions.stageAll);
+    this.addQuickAction(grid, "Commit", "git-commit", "commit", this.actions.commit);
+    this.addQuickAction(grid, "Push", "upload", "push", this.actions.push);
+    this.addQuickAction(grid, "Pull", "download", "pull", this.actions.pull);
 
     const header = container.createDiv();
     header.style.display = "flex";
@@ -335,17 +335,13 @@ export class VeloxGitView extends ItemView {
     parent: HTMLElement,
     label: string,
     icon: string,
+    kind: "stage" | "commit" | "push" | "pull",
     onClick: () => void,
   ): void {
     const button = parent.createEl("button");
+    button.className = `velox-btn velox-btn-${kind}`;
     button.title = label;
     button.setAttribute("aria-label", label);
-    button.style.display = "flex";
-    button.style.alignItems = "center";
-    button.style.justifyContent = "center";
-    button.style.gap = "6px";
-    button.style.padding = "10px 8px";
-    button.style.cursor = "pointer";
 
     const iconEl = button.createSpan();
     setIcon(iconEl, icon);

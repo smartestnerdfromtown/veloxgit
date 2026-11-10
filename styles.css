@@ -139,3 +139,57 @@
 .theme-dark .velox-badge-renamed {
   --velox-badge-ink: #7fd6ff;
 }
+
+/* --- Sidebar action buttons ---------------------------------------------- */
+
+button.velox-btn {
+  --velox-btn-accent: var(--text-muted);
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 8px;
+  background: var(--background-primary-alt);
+  color: var(--velox-btn-accent);
+  font-family: inherit;
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Keep Obsidian's default button chrome from overriding the accent. */
+button.velox-btn:hover,
+button.velox-btn:focus-visible {
+  background: var(--background-primary-alt);
+  border-color: currentColor;
+  color: var(--velox-btn-accent);
+  box-shadow: none;
+}
+
+button.velox-btn svg {
+  width: 1em;
+  height: 1em;
+  stroke: currentColor;
+  fill: none;
+}
+
+.velox-btn-stage {
+  --velox-btn-accent: var(--color-green);
+}
+
+.velox-btn-commit {
+  --velox-btn-accent: var(--color-blue);
+}
+
+.velox-btn-push {
+  --velox-btn-accent: var(--color-purple);
+}
+
+.velox-btn-pull {
+  --velox-btn-accent: var(--color-orange);
+}

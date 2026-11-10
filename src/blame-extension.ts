@@ -9,7 +9,6 @@ import {
   EditorView,
   ViewPlugin,
   WidgetType,
-  type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
 import { editorInfoField } from "obsidian";
@@ -34,7 +33,7 @@ interface BlamePayload {
 const SLOW_BLAME_MS = 50;
 
 /** Wait for the cursor to rest before painting, avoiding typing flicker. */
-const CURSOR_REST_MS = 180;
+const CURSOR_REST_MS = 150;
 
 let blameEnabled = true;
 const activeViews = new Set<BlameView>();
@@ -70,6 +69,7 @@ export function disposeBlameExtension(): void {
 }
 
 const setBlame = StateEffect.define<BlamePayload | null>();
+const setActive = StateEffect.define<boolean>();
 
 /** Muted end-of-line label for the active line. */
 class BlameWidget extends WidgetType {
@@ -99,47 +99,69 @@ class BlameWidget extends WidgetType {
   }
 }
 
-/** Holds the active-line highlight and at most one blame widget. */
-const blameField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(decorations, tr) {
-    let next = decorations.map(tr.changes);
-
+/** Holds the label to render. Cleared when the cursor leaves its line. */
+const blameField = StateField.define<BlamePayload | null>({
+  create: () => null,
+  update(value, tr) {
+    let next = value;
     for (const effect of tr.effects) {
-      if (!effect.is(setBlame)) continue;
-
-      if (!effect.value) {
-        next = Decoration.none;
-        continue;
-      }
-
-      const lineNumber = Math.min(
-        Math.max(1, effect.value.line),
-        tr.state.doc.lines,
-      );
-      const line = tr.state.doc.line(lineNumber);
-      const marks = [
-        Decoration.line({ attributes: { class: "veloxgit-active-line" } }).range(
-          line.from,
-        ),
-      ];
-
-      if (effect.value.text !== null) {
-        marks.push(
-          Decoration.widget({
-            widget: new BlameWidget(effect.value.text),
-            side: 1,
-          }).range(line.to),
-        );
-      }
-
-      next = Decoration.set(marks, true);
+      if (effect.is(setBlame)) next = effect.value;
     }
 
+    if (
+      next !== null &&
+      (tr.docChanged ||
+        tr.state.doc.lineAt(tr.state.selection.main.head).number !== next.line)
+    ) {
+      return null;
+    }
     return next;
   },
-  provide: (field) => EditorView.decorations.from(field),
 });
+
+/** Enabled flag kept in state so disabled editors stay completely idle. */
+const blameActive = StateField.define<boolean>({
+  create: () => blameEnabled,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setActive)) value = effect.value;
+    }
+    return value;
+  },
+});
+
+/** Reused decoration; stable identity avoids re-applying line classes. */
+const ACTIVE_LINE = Decoration.line({
+  attributes: { class: "veloxgit-active-line" },
+});
+
+/**
+ * Decorations are derived from state, so the active-line highlight moves with
+ * the cursor in the same frame; only the label waits for the debounce.
+ */
+const blameDecorations = EditorView.decorations.compute(
+  [blameField, blameActive, editorInfoField, "selection", "doc"],
+  (state) => {
+    if (!state.field(blameActive) || filePathFor(state) === null) {
+      return Decoration.none;
+    }
+
+    const line = state.doc.lineAt(state.selection.main.head);
+    const marks = [ACTIVE_LINE.range(line.from)];
+    const value = state.field(blameField);
+
+    if (value?.text) {
+      marks.push(
+        Decoration.widget({
+          widget: new BlameWidget(value.text),
+          side: 1,
+        }).range(line.to),
+      );
+    }
+
+    return Decoration.set(marks, true);
+  },
+);
 
 /** The markdown file attached to this specific editor view, if any. */
 function filePathFor(state: EditorState): string | null {
@@ -181,6 +203,7 @@ class BlameView {
   setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
+    this.view.dispatch({ effects: setActive.of(enabled) });
 
     if (enabled) {
       this.schedule();
@@ -208,6 +231,15 @@ class BlameView {
     // saves refresh every view through `notifyBlameChanged()`.
     const fileChanged =
       filePathFor(update.startState) !== filePathFor(update.state);
+
+    // The state field drops the label on cursor/doc changes; mirror that so
+    // the next debounced paint is not skipped as a duplicate.
+    if (
+      this.painted !== null &&
+      (update.docChanged || this.currentLine() !== this.painted.line)
+    ) {
+      this.painted = null;
+    }
 
     if (
       this.enabled &&
@@ -310,7 +342,9 @@ class BlameView {
     this.painted = value;
     this.view.dispatch({ effects: setBlame.of(value) });
 
-    if (value?.text) this.scheduleVisibility();
+    // Measure synchronously so a crowded line never flashes the label for a
+    // frame before hiding it.
+    if (value?.text) this.syncVisibility();
     else this.cancelVisibility();
   }
 
@@ -383,6 +417,8 @@ export function createBlameExtension(
 ): Extension {
   return [
     blameField,
+    blameActive,
+    blameDecorations,
     ViewPlugin.fromClass(
       class extends BlameView {
         constructor(view: EditorView) {
