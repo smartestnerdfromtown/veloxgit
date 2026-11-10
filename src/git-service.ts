@@ -1,12 +1,15 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { parseBlamePorcelain, type BlameLine } from "./blame";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 // Staging a large vault can legitimately take longer than config checks.
 const STAGE_TIMEOUT_MS = 60_000;
 // The sidebar polls status once per second; this bounds a stuck call.
 const STATUS_TIMEOUT_MS = 10_000;
+// Blame of a very large file can take a while on first run.
+const BLAME_TIMEOUT_MS = 30_000;
 // Diffs are user-triggered, so they get a slightly larger budget.
 const DIFF_TIMEOUT_MS = 15_000;
 // Checkout can touch many files in a large vault.
@@ -312,6 +315,33 @@ export class GitService {
       throw new Error(result.stderr || "git status failed");
     }
     return result.stdout.length > 0;
+  }
+
+  /**
+   * Runs `git blame --porcelain` for one vault-relative file and returns a
+   * line-number keyed map of author, author time, and commit summary.
+   */
+  async getBlame(filePath: string): Promise<Map<number, BlameLine>> {
+    if (
+      filePath.length === 0 ||
+      filePath.includes("\0") ||
+      path.isAbsolute(filePath) ||
+      filePath.split(/[\\/]/).includes("..")
+    ) {
+      throw new Error("Invalid path for git blame");
+    }
+
+    const result = await this.run(
+      ["--no-optional-locks", "blame", "--porcelain", "--", filePath],
+      BLAME_TIMEOUT_MS,
+      false,
+      MAX_DIFF_BYTES,
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr || "git blame failed");
+    }
+
+    return parseBlamePorcelain(result.stdout);
   }
 
   /** Local branch names for the switch modal. */
