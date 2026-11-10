@@ -64,9 +64,100 @@
   }
 }
 
+/* --- Sidebar layout ------------------------------------------------------ */
+
+.veloxgit-sidebar-container {
+  box-sizing: border-box;
+  padding: 8px;
+}
+
+.veloxgit-sidebar-container .veloxgit-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.veloxgit-sidebar-container .veloxgit-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 2px 4px;
+}
+
+.veloxgit-sidebar-container .veloxgit-list-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.veloxgit-sidebar-container .veloxgit-list-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.veloxgit-sidebar-container .veloxgit-list-count {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.veloxgit-sidebar-container .veloxgit-file-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.veloxgit-sidebar-container .veloxgit-list-empty {
+  padding: 4px 2px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.veloxgit-sidebar-container .veloxgit-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.veloxgit-sidebar-container .veloxgit-file-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.veloxgit-sidebar-container .veloxgit-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.veloxgit-sidebar-container .veloxgit-branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.veloxgit-sidebar-container .veloxgit-branch:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.veloxgit-sidebar-container .veloxgit-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- Sidebar file-status badges ------------------------------------------ */
 
-.velox-badge {
+.veloxgit-sidebar-container .velox-badge {
   /* Each variant only sets the ink; border and fill derive from it, so
      contrast follows the active theme without duplicated colors. */
   --velox-badge-ink: var(--text-normal);
@@ -99,52 +190,66 @@
 }
 
 /* Light theme: deep inks on pastel fills. */
-.velox-badge-untracked {
+.veloxgit-sidebar-container .velox-badge-untracked {
   --velox-badge-ink: #8b0000;
 }
 
-.velox-badge-modified {
+.veloxgit-sidebar-container .velox-badge-modified {
   --velox-badge-ink: #b78103;
 }
 
-.velox-badge-added {
+.veloxgit-sidebar-container .velox-badge-added {
   --velox-badge-ink: #2e7d32;
 }
 
-.velox-badge-deleted {
+.veloxgit-sidebar-container .velox-badge-deleted {
   --velox-badge-ink: #5e4b8b;
 }
 
-.velox-badge-renamed {
+.veloxgit-sidebar-container .velox-badge-renamed {
   --velox-badge-ink: #0277bd;
 }
 
 /* Dark theme: lift the inks so text and outlines stay readable. */
-.theme-dark .velox-badge-untracked {
+.theme-dark .veloxgit-sidebar-container .velox-badge-untracked {
   --velox-badge-ink: #ff9d9d;
 }
 
-.theme-dark .velox-badge-modified {
+.theme-dark .veloxgit-sidebar-container .velox-badge-modified {
   --velox-badge-ink: #ffcc66;
 }
 
-.theme-dark .velox-badge-added {
+.theme-dark .veloxgit-sidebar-container .velox-badge-added {
   --velox-badge-ink: #86e29a;
 }
 
-.theme-dark .velox-badge-deleted {
+.theme-dark .veloxgit-sidebar-container .velox-badge-deleted {
   --velox-badge-ink: #c4a9e8;
 }
 
-.theme-dark .velox-badge-renamed {
+.theme-dark .veloxgit-sidebar-container .velox-badge-renamed {
   --velox-badge-ink: #7fd6ff;
 }
 
 /* --- Sidebar action buttons ---------------------------------------------- */
 
-button.velox-btn {
+.veloxgit-sidebar-container button.velox-btn {
   --velox-btn-accent: var(--text-muted);
   --velox-btn-fill: var(--background-primary-alt);
+  /* Theme-aware derivations: the accent is mixed with the vault background,
+     so the hover fill and glow stay legible in light and dark themes. */
+  --velox-btn-hover-bg: rgba(128, 128, 128, 0.18);
+  --velox-btn-hover-bg: color-mix(
+    in srgb,
+    var(--velox-btn-accent) 16%,
+    var(--background-primary)
+  );
+  --velox-btn-glow: rgba(128, 128, 128, 0.4);
+  --velox-btn-glow: color-mix(
+    in srgb,
+    var(--velox-btn-accent) 45%,
+    transparent
+  );
 
   display: inline-flex;
   align-items: center;
@@ -160,19 +265,61 @@ button.velox-btn {
   font-weight: 600;
   line-height: 1.2;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  backface-visibility: hidden;
+  transition:
+    background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Keep Obsidian's default button chrome from overriding the accent. */
-button.velox-btn:hover,
-button.velox-btn:focus-visible {
-  background-color: var(--velox-btn-fill);
+.veloxgit-sidebar-container button.velox-btn:hover {
+  background-color: var(--velox-btn-hover-bg);
   border-color: currentColor;
   color: var(--velox-btn-accent);
-  box-shadow: none;
+  box-shadow: 0 0 12px 2px var(--velox-btn-glow);
+  transform: translateY(-1px);
+  will-change: transform, box-shadow;
 }
 
-button.velox-btn svg {
+.veloxgit-sidebar-container button.velox-btn:focus-visible {
+  background-color: var(--velox-btn-hover-bg);
+  border-color: currentColor;
+  color: var(--velox-btn-accent);
+  outline: 2px solid var(--velox-btn-accent);
+  outline-offset: 2px;
+  box-shadow: none;
+  will-change: transform, box-shadow;
+}
+
+.veloxgit-sidebar-container button.velox-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 0 4px 1px var(--velox-btn-glow);
+  will-change: transform, box-shadow;
+}
+
+.veloxgit-sidebar-container button.velox-btn:disabled {
+  background-color: var(--velox-btn-fill);
+  box-shadow: none;
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .veloxgit-sidebar-container button.velox-btn {
+    transition: none;
+  }
+
+  .veloxgit-sidebar-container button.velox-btn:hover {
+    transform: none;
+  }
+}
+
+.veloxgit-sidebar-container button.velox-btn svg {
   width: 1em;
   height: 1em;
   stroke: currentColor;
@@ -180,44 +327,44 @@ button.velox-btn svg {
 }
 
 /* Variant selectors add the base class so they outrank
-   `button.velox-btn` variable declarations. */
-button.velox-btn.velox-btn-stage {
+   `.veloxgit-sidebar-container button.velox-btn` variable declarations. */
+.veloxgit-sidebar-container button.velox-btn.velox-btn-stage {
   --velox-btn-accent: #58a6ff;
   --velox-btn-fill: rgba(88, 166, 255, 0.08);
 }
 
-button.velox-btn.velox-btn-commit {
+.veloxgit-sidebar-container button.velox-btn.velox-btn-commit {
   --velox-btn-accent: #bc8cff;
   --velox-btn-fill: rgba(188, 140, 255, 0.08);
 }
 
-button.velox-btn.velox-btn-push {
+.veloxgit-sidebar-container button.velox-btn.velox-btn-push {
   --velox-btn-accent: #f29d38;
   --velox-btn-fill: rgba(242, 157, 56, 0.08);
 }
 
-button.velox-btn.velox-btn-pull {
+.veloxgit-sidebar-container button.velox-btn.velox-btn-pull {
   --velox-btn-accent: #3fb950;
   --velox-btn-fill: rgba(63, 185, 80, 0.08);
 }
 
 /* Light theme: deepen the inks so the palette keeps its contrast on white. */
-.theme-light button.velox-btn.velox-btn-stage {
+.theme-light .veloxgit-sidebar-container button.velox-btn.velox-btn-stage {
   --velox-btn-accent: #0969da;
   --velox-btn-fill: rgba(9, 105, 218, 0.08);
 }
 
-.theme-light button.velox-btn.velox-btn-commit {
+.theme-light .veloxgit-sidebar-container button.velox-btn.velox-btn-commit {
   --velox-btn-accent: #8250df;
   --velox-btn-fill: rgba(130, 80, 223, 0.08);
 }
 
-.theme-light button.velox-btn.velox-btn-push {
+.theme-light .veloxgit-sidebar-container button.velox-btn.velox-btn-push {
   --velox-btn-accent: #bc4c00;
   --velox-btn-fill: rgba(188, 76, 0, 0.08);
 }
 
-.theme-light button.velox-btn.velox-btn-pull {
+.theme-light .veloxgit-sidebar-container button.velox-btn.velox-btn-pull {
   --velox-btn-accent: #1a7f37;
   --velox-btn-fill: rgba(26, 127, 55, 0.08);
 }

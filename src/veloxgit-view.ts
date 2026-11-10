@@ -72,71 +72,36 @@ export class VeloxGitView extends ItemView {
   async onOpen(): Promise<void> {
     const container = this.contentEl;
     container.empty();
-    container.style.padding = "8px";
-    container.style.boxSizing = "border-box";
+    container.classList.add("veloxgit-sidebar-container");
 
-    const grid = container.createDiv();
-    grid.style.display = "grid";
-    grid.style.gridTemplateColumns = "1fr 1fr";
-    grid.style.gap = "8px";
+    const grid = container.createDiv({ cls: "veloxgit-actions" });
 
     this.addQuickAction(grid, "Stage all", "plus-circle", "stage", this.actions.stageAll);
     this.addQuickAction(grid, "Commit", "git-commit", "commit", this.actions.commit);
     this.addQuickAction(grid, "Push", "upload", "push", this.actions.push);
     this.addQuickAction(grid, "Pull", "download", "pull", this.actions.pull);
 
-    const header = container.createDiv();
-    header.style.display = "flex";
-    header.style.alignItems = "center";
-    header.style.justifyContent = "space-between";
-    header.style.margin = "12px 2px 4px";
+    const header = container.createDiv({ cls: "veloxgit-list-header" });
 
-    const title = header.createDiv({ text: "Changed files" });
-    title.style.fontSize = "12px";
-    title.style.fontWeight = "600";
-    title.style.textTransform = "uppercase";
-    title.style.letterSpacing = "0.04em";
-    title.style.opacity = "0.8";
+    header.createDiv({
+      cls: "veloxgit-list-title",
+      text: "Changed files",
+    });
 
-    const right = header.createDiv();
-    right.style.display = "flex";
-    right.style.alignItems = "center";
-    right.style.gap = "6px";
+    const right = header.createDiv({ cls: "veloxgit-list-meta" });
+    this.countEl = right.createSpan({ cls: "veloxgit-list-count" });
 
-    this.countEl = right.createSpan();
-    this.countEl.style.fontSize = "11px";
-    this.countEl.style.opacity = "0.6";
+    this.listEl = container.createDiv({ cls: "veloxgit-file-list" });
 
-    this.listEl = container.createDiv();
-    this.listEl.style.display = "flex";
-    this.listEl.style.flexDirection = "column";
-
-    const branch = container.createDiv();
-    branch.style.display = "flex";
-    branch.style.alignItems = "center";
-    branch.style.gap = "6px";
-    branch.style.marginTop = "10px";
-    branch.style.paddingTop = "8px";
-    branch.style.borderTop = "1px solid var(--background-modifier-border)";
-    branch.style.fontSize = "12px";
-    branch.style.cursor = "pointer";
+    const branch = container.createDiv({ cls: "veloxgit-branch" });
     branch.title = "Switch or create branch";
 
     const branchIcon = branch.createSpan();
     setIcon(branchIcon, "git-branch");
-    this.branchEl = branch.createSpan({ text: "…" });
-    this.branchEl.style.overflow = "hidden";
-    this.branchEl.style.textOverflow = "ellipsis";
-    this.branchEl.style.whiteSpace = "nowrap";
+    this.branchEl = branch.createSpan({ cls: "veloxgit-branch-name", text: "…" });
     this.branchText = "…";
 
     branch.addEventListener("click", () => this.actions.showBranchPrompt());
-    branch.addEventListener("mouseenter", () => {
-      branch.style.background = "var(--background-modifier-hover)";
-    });
-    branch.addEventListener("mouseleave", () => {
-      branch.style.background = "";
-    });
 
     this.renderedSignature = null;
     await this.refresh();
@@ -179,9 +144,10 @@ export class VeloxGitView extends ItemView {
       this.rows.clear();
       this.emptyEl = null;
       listEl.empty();
-      const error = listEl.createDiv({ text: "Unable to read Git status." });
-      error.style.fontSize = "12px";
-      error.style.opacity = "0.6";
+      listEl.createDiv({
+        cls: "veloxgit-list-empty",
+        text: "Unable to read Git status.",
+      });
       if (this.countEl) this.countEl.setText("");
     } finally {
       this.refreshing = false;
@@ -232,11 +198,10 @@ export class VeloxGitView extends ItemView {
     if (changes.length === 0) {
       this.removeRows();
       if (!this.emptyEl) {
-        const empty = listEl.createDiv({ text: "No changes" });
-        empty.style.fontSize = "12px";
-        empty.style.opacity = "0.6";
-        empty.style.padding = "4px 2px";
-        this.emptyEl = empty;
+        this.emptyEl = listEl.createDiv({
+          cls: "veloxgit-list-empty",
+          text: "No changes",
+        });
       }
       return;
     }
@@ -286,13 +251,7 @@ export class VeloxGitView extends ItemView {
 
   private createRow(change: FileChange): RowEntry {
     const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.alignItems = "center";
-    row.style.gap = "8px";
-    row.style.padding = "3px 2px";
-    row.style.fontSize = "12px";
-    row.style.cursor = "pointer";
-    row.style.borderRadius = "4px";
+    row.className = "veloxgit-file-row";
     row.title = `View diff: ${change.path}`;
     row.setAttribute("role", "button");
     row.tabIndex = 0;
@@ -304,10 +263,8 @@ export class VeloxGitView extends ItemView {
     badge.setText(TAGS[change.kind]);
 
     const path = document.createElement("span");
+    path.className = "veloxgit-file-path";
     path.setText(change.path);
-    path.style.overflow = "hidden";
-    path.style.textOverflow = "ellipsis";
-    path.style.whiteSpace = "nowrap";
 
     row.append(badge, path);
 
@@ -320,12 +277,6 @@ export class VeloxGitView extends ItemView {
         event.preventDefault();
         this.actions.showDiff(entry.change);
       }
-    });
-    row.addEventListener("mouseenter", () => {
-      row.style.background = "var(--background-modifier-hover)";
-    });
-    row.addEventListener("mouseleave", () => {
-      row.style.background = "";
     });
 
     return entry;
