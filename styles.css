@@ -67,6 +67,10 @@
 /* --- Sidebar file-status badges ------------------------------------------ */
 
 .velox-badge {
+  /* Each variant only sets the ink; border and fill derive from it, so
+     contrast follows the active theme without duplicated colors. */
+  --velox-badge-ink: var(--text-normal);
+
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -77,41 +81,61 @@
   box-sizing: border-box;
   border-style: solid;
   border-width: 1.5px;
-  border-color: currentColor;
+  border-color: var(--velox-badge-ink);
   border-radius: 6px;
   font-family: var(--font-monospace);
   font-size: 0.75em;
   font-weight: 700;
   line-height: 1;
+  color: var(--velox-badge-ink);
   user-select: none;
+  /* Fallback for older renderers without color-mix(). */
+  background-color: rgba(128, 128, 128, 0.16);
+  background-color: color-mix(
+    in srgb,
+    var(--velox-badge-ink) 18%,
+    transparent
+  );
 }
 
+/* Light theme: deep inks on pastel fills. */
 .velox-badge-untracked {
-  background-color: rgba(255, 128, 128, 0.35);
-  border-color: #8b0000;
-  color: #8b0000;
+  --velox-badge-ink: #8b0000;
 }
 
 .velox-badge-modified {
-  background-color: rgba(255, 204, 128, 0.35);
-  border-color: #b78103;
-  color: #b78103;
+  --velox-badge-ink: #b78103;
 }
 
 .velox-badge-added {
-  background-color: rgba(165, 214, 167, 0.35);
-  border-color: #2e7d32;
-  color: #2e7d32;
+  --velox-badge-ink: #2e7d32;
 }
 
 .velox-badge-deleted {
-  background-color: rgba(179, 157, 219, 0.35);
-  border-color: #5e4b8b;
-  color: #5e4b8b;
+  --velox-badge-ink: #5e4b8b;
 }
 
 .velox-badge-renamed {
-  background-color: rgba(129, 212, 250, 0.35);
-  border-color: #0277bd;
-  color: #0277bd;
+  --velox-badge-ink: #0277bd;
+}
+
+/* Dark theme: lift the inks so text and outlines stay readable. */
+.theme-dark .velox-badge-untracked {
+  --velox-badge-ink: #ff9d9d;
+}
+
+.theme-dark .velox-badge-modified {
+  --velox-badge-ink: #ffcc66;
+}
+
+.theme-dark .velox-badge-added {
+  --velox-badge-ink: #86e29a;
+}
+
+.theme-dark .velox-badge-deleted {
+  --velox-badge-ink: #c4a9e8;
+}
+
+.theme-dark .velox-badge-renamed {
+  --velox-badge-ink: #7fd6ff;
 }

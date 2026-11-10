@@ -26,6 +26,14 @@ const TAGS: Record<FileChange["kind"], string> = {
 // state still trigger an immediate refresh through the plugin.
 const POLL_INTERVAL_MS = 2_000;
 
+/** One rendered file row, reused across polls while its path stays listed. */
+interface RowEntry {
+  row: HTMLElement;
+  badge: HTMLElement;
+  path: HTMLElement;
+  change: FileChange;
+}
+
 /**
  * Compact quick-action panel with a changed-files list underneath.
  * The list refreshes itself every two seconds while the panel is open.
@@ -39,6 +47,8 @@ export class VeloxGitView extends ItemView {
   private refreshing = false;
   private renderedSignature: string | null = null;
   private timer: number | null = null;
+  private readonly rows = new Map<string, RowEntry>();
+  private emptyEl: HTMLElement | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -136,6 +146,8 @@ export class VeloxGitView extends ItemView {
   async onClose(): Promise<void> {
     this.stopPolling();
     this.refreshToken += 1;
+    this.rows.clear();
+    this.emptyEl = null;
     this.listEl = null;
     this.countEl = null;
     this.branchEl = null;
@@ -164,6 +176,8 @@ export class VeloxGitView extends ItemView {
     } catch {
       if (token !== this.refreshToken || this.listEl !== listEl) return;
       this.renderedSignature = null;
+      this.rows.clear();
+      this.emptyEl = null;
       listEl.empty();
       const error = listEl.createDiv({ text: "Unable to read Git status." });
       error.style.fontSize = "12px";
@@ -207,7 +221,6 @@ export class VeloxGitView extends ItemView {
     if (signature === this.renderedSignature) return;
     this.renderedSignature = signature;
 
-    listEl.empty();
     if (this.countEl) {
       this.countEl.setText(
         changes.length === 0
@@ -217,59 +230,105 @@ export class VeloxGitView extends ItemView {
     }
 
     if (changes.length === 0) {
-      const empty = listEl.createDiv({ text: "No changes" });
-      empty.style.fontSize = "12px";
-      empty.style.opacity = "0.6";
-      empty.style.padding = "4px 2px";
+      this.removeRows();
+      if (!this.emptyEl) {
+        const empty = listEl.createDiv({ text: "No changes" });
+        empty.style.fontSize = "12px";
+        empty.style.opacity = "0.6";
+        empty.style.padding = "4px 2px";
+        this.emptyEl = empty;
+      }
       return;
     }
 
-    const fragment = document.createDocumentFragment();
+    this.emptyEl?.remove();
+    this.emptyEl = null;
+
+    // Reuse one row and badge per path; only status transitions repaint text.
+    const seen = new Set<string>();
+    let index = 0;
 
     for (const change of changes) {
-      const row = document.createElement("div");
-      row.style.display = "flex";
-      row.style.alignItems = "center";
-      row.style.gap = "8px";
-      row.style.padding = "3px 2px";
-      row.style.fontSize = "12px";
-      row.style.cursor = "pointer";
-      row.style.borderRadius = "4px";
-      row.title = `View diff: ${change.path}`;
-      row.setAttribute("role", "button");
-      row.tabIndex = 0;
+      seen.add(change.path);
+      let entry = this.rows.get(change.path);
 
-      row.addEventListener("click", () => this.actions.showDiff(change));
-      row.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          this.actions.showDiff(change);
+      if (!entry) {
+        entry = this.createRow(change);
+        this.rows.set(change.path, entry);
+      } else {
+        entry.change = change;
+        if (entry.badge.dataset.kind !== change.kind) {
+          entry.badge.dataset.kind = change.kind;
+          entry.badge.className = `velox-badge velox-badge-${change.kind}`;
+          entry.badge.setText(TAGS[change.kind]);
         }
-      });
-      row.addEventListener("mouseenter", () => {
-        row.style.background = "var(--background-modifier-hover)";
-      });
-      row.addEventListener("mouseleave", () => {
-        row.style.background = "";
-      });
+      }
 
-      // Status indicators render as themed badges; styling lives in styles.css.
-      const badge = document.createElement("span");
-      badge.className = `velox-badge velox-badge-${change.kind}`;
-      badge.setText(TAGS[change.kind]);
-
-      const path = document.createElement("span");
-      path.setText(change.path);
-      path.style.overflow = "hidden";
-      path.style.textOverflow = "ellipsis";
-      path.style.whiteSpace = "nowrap";
-
-      row.appendChild(badge);
-      row.appendChild(path);
-      fragment.appendChild(row);
+      // Keep DOM order without detaching and recreating nodes.
+      if (listEl.children[index] !== entry.row) {
+        listEl.insertBefore(entry.row, listEl.children[index] ?? null);
+      }
+      index += 1;
     }
 
-    listEl.appendChild(fragment);
+    for (const [path, entry] of this.rows) {
+      if (seen.has(path)) continue;
+      entry.row.remove();
+      this.rows.delete(path);
+    }
+  }
+
+  /** Detaches every cached row so a fresh status can rebuild the map. */
+  private removeRows(): void {
+    for (const entry of this.rows.values()) entry.row.remove();
+    this.rows.clear();
+  }
+
+  private createRow(change: FileChange): RowEntry {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "8px";
+    row.style.padding = "3px 2px";
+    row.style.fontSize = "12px";
+    row.style.cursor = "pointer";
+    row.style.borderRadius = "4px";
+    row.title = `View diff: ${change.path}`;
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+
+    // Status indicators render as themed badges; styling lives in styles.css.
+    const badge = document.createElement("span");
+    badge.className = `velox-badge velox-badge-${change.kind}`;
+    badge.dataset.kind = change.kind;
+    badge.setText(TAGS[change.kind]);
+
+    const path = document.createElement("span");
+    path.setText(change.path);
+    path.style.overflow = "hidden";
+    path.style.textOverflow = "ellipsis";
+    path.style.whiteSpace = "nowrap";
+
+    row.append(badge, path);
+
+    const entry: RowEntry = { row, badge, path, change };
+
+    // Handlers read `entry.change`, so reused rows always open the latest diff.
+    row.addEventListener("click", () => this.actions.showDiff(entry.change));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        this.actions.showDiff(entry.change);
+      }
+    });
+    row.addEventListener("mouseenter", () => {
+      row.style.background = "var(--background-modifier-hover)";
+    });
+    row.addEventListener("mouseleave", () => {
+      row.style.background = "";
+    });
+
+    return entry;
   }
 
   private addQuickAction(
